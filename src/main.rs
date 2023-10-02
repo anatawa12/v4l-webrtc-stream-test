@@ -80,6 +80,10 @@ fn main() -> io::Result<()> {
         })?;
     }
 
+    camera_stream.finish()?;
+    encoder_raw_stream.finish()?;
+    encoder_encoded_queue.finish()?;
+
     Ok(())
 }
 
@@ -126,6 +130,12 @@ impl <'a, Type : StreamTypeMarker> StreamBase<'a, Type> {
         let queue = queue.start_stream()?;
 
         return Ok(Self { queue, _phantom: PhantomData })
+    }
+
+    pub fn finish(self) -> io::Result<()> {
+        let Self{ queue, _phantom } = self;
+        queue.stop_stream()?;
+        Ok(())
     }
 }
 
