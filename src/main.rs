@@ -1,11 +1,14 @@
 use std::fs::File;
 use std::io;
 use std::io::Write;
+use std::marker::PhantomData;
 use v4l::prelude::*;
 use v4l::{Format, FourCC, Memory};
 use v4l::buffer::{Metadata, Type};
 use v4l::capability::Flags;
 use v4l::io::Queue;
+use v4l::io::queue::Streaming;
+use v4l::memory::Mmap;
 use v4l::video::{Capture, capture, Output, output};
 
 fn main() -> io::Result<()> {
@@ -57,40 +60,24 @@ fn main() -> io::Result<()> {
     Capture::set_format(&mut encoder, &encoded_format)?;
     Output::set_params(&mut encoder, &output::Parameters::with_fps(fps))?;
 
-    let mut camera_queue = Queue::with_mmap(camera.handle(), Type::VideoCapture, 2)?;
-    let mut encoder_raw_queue = Queue::with_mmap(encoder.handle(), Type::VideoOutput, 1)?;
-    let mut encoder_encoded_queue = Queue::with_mmap(encoder.handle(), Type::VideoCapture, 1)?;
-
-    for i in 0..camera_queue.len() {
-        camera_queue.enqueue(&buffer_metadata(i))?;
-    }
-
-    for i in 0..camera_queue.len() {
-        camera_queue.enqueue(&buffer_metadata(i))?;
-    }
-
-    let mut camera_queue = camera_queue.start_stream()?;
-    let mut encoder_raw_queue = encoder_raw_queue.start_stream()?;
-    let mut encoder_encoded_queue = encoder_encoded_queue.start_stream()?;
+    let mut camera_stream = CaptureStream::with_device(&camera, 3)?;
+    let mut encoder_raw_stream = OutputStream::with_device(&encoder, 1)?;
+    let mut encoder_encoded_queue = CaptureStream::with_device(&encoder, 1)?;
 
     let mut write_to = File::open("test.h264")?;
 
     for _ in 0..100 {
-        let mut encoder_raw_buf_meta = encoder_raw_queue.dequeue()?;
-        let encoder_raw_buf = &mut encoder_raw_queue[encoder_raw_buf_meta.index as usize].0;
+        encoder_raw_stream.write_frame(|buffer| {
+            camera_stream.read_frame(|frame| {
+                buffer.copy_from_slice(frame);
+                Ok(frame.len())
+            })
+        })?;
 
-        let camera_buf_meta = camera_queue.dequeue()?;
-        let camera_buf = &camera_queue[camera_buf_meta.index as usize].0;
-        (*encoder_raw_buf).copy_from_slice(&camera_buf[..camera_buf.len()]);
-        encoder_raw_buf_meta.bytesused = camera_buf.len() as u32;
-        camera_queue.enqueue(&camera_buf_meta)?;
-
-        encoder_raw_queue.enqueue(&encoder_raw_buf_meta)?;
-
-        let encoder_encoded_meta = encoder_encoded_queue.dequeue()?;
-        let encoder_encoded_buf = &encoder_encoded_queue[encoder_encoded_meta.index as usize].0;
-
-        write_to.write(&encoder_encoded_buf[..encoder_encoded_meta.bytesused as usize])?;
+        encoder_encoded_queue.read_frame(|buffer| {
+            write_to.write(buffer)?;
+            Ok(())
+        })?;
     }
 
     Ok(())
@@ -101,5 +88,69 @@ fn buffer_metadata(index: usize) -> Metadata {
         memory: Memory::Mmap,
         index: index as u32,
         ..unsafe { std::mem::zeroed() }
+    }
+}
+
+type CaptureStream<'a> = StreamBase<'a, VideoCapture>;
+type OutputStream<'a> = StreamBase<'a, VideoOutput>;
+
+trait StreamTypeMarker {
+    const TYPE: Type;
+}
+
+struct VideoCapture;
+
+impl StreamTypeMarker for VideoCapture {
+    const TYPE: Type = Type::VideoCapture;
+}
+
+struct VideoOutput;
+
+impl StreamTypeMarker for VideoOutput {
+    const TYPE: Type = Type::VideoCapture;
+}
+
+struct StreamBase<'a, Type: StreamTypeMarker> {
+    queue: Queue<Mmap<'a>, Streaming>,
+    _phantom: PhantomData<Type>,
+}
+
+impl <'a, Type : StreamTypeMarker> StreamBase<'a, Type> {
+    pub fn with_device(device: &Device, buf_count: u32) -> io::Result<Self> {
+        let mut queue = Queue::with_mmap(device.handle(), Type::TYPE, buf_count)?;
+
+        for i in 0..queue.len() {
+            queue.enqueue(&buffer_metadata(i))?;
+        }
+
+        let queue = queue.start_stream()?;
+
+        return Ok(Self { queue, _phantom: PhantomData })
+    }
+}
+
+impl <'a> StreamBase<'a, VideoCapture> {
+    pub(crate) fn read_frame<R>(
+        &mut self,
+        process_data: impl for <'b> FnOnce(&'b [u8]) -> io::Result<R>,
+    ) -> io::Result<R> {
+        let encoder_encoded_meta = self.queue.dequeue()?;
+        let encoder_encoded_buf = &self.queue[encoder_encoded_meta.index as usize].0[..encoder_encoded_meta.bytesused as usize];
+        let result = process_data(encoder_encoded_buf)?;
+        self.queue.enqueue(&encoder_encoded_meta)?;
+        Ok(result)
+    }
+}
+
+impl <'a> StreamBase<'a, VideoOutput> {
+    pub(crate) fn write_frame(
+        &mut self,
+        get_raw_data: impl for <'b> FnOnce(&'b mut [u8]) -> io::Result<usize>,
+    ) -> io::Result<()> {
+        let mut encoder_encoded_meta = self.queue.dequeue()?;
+        let encoder_encoded_buf = &mut self.queue[encoder_encoded_meta.index as usize].0[..];
+        encoder_encoded_meta.bytesused = get_raw_data(encoder_encoded_buf)? as u32;
+        self.queue.enqueue(&encoder_encoded_meta)?;
+        Ok(())
     }
 }
