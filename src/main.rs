@@ -83,7 +83,7 @@ fn main() -> io::Result<()> {
         println!("frame {i}: deq");
         let (out_buffers, _meta, planes) = CaptureStream::get(&encoder_encoded_stream1, index).unwrap();
         write_to.write(&out_buffers[0][..planes[0].bytesused as usize]).unwrap();
-        OutputStream::queue(&mut encoder_encoded_stream1, index).unwrap();
+        CaptureStream::queue(&mut encoder_encoded_stream1, index).unwrap();
         println!("frame {i}: que");
 
         //encoder_raw_stream.write_frame(|buffer| {
