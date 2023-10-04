@@ -20,7 +20,7 @@ fn main() -> io::Result<()> {
     let camera_format = Format {
         width: 640,
         height: 480,
-        fourcc: FourCC::new(b"YUYV"),
+        fourcc: FourCC::new(b"RGB3"),
         ..unsafe { std::mem::zeroed() }
     };
 
@@ -31,28 +31,30 @@ fn main() -> io::Result<()> {
         ..unsafe { std::mem::zeroed() }
     };
 
-    let mut camera = Device::new(camera_device)?;
+    //let mut camera = Device::new(camera_device)?;
 
-    let camera_caps = camera.query_caps()?;
-    if !camera_caps.capabilities.contains(Flags::VIDEO_CAPTURE) {
-        panic!("Camera: Capture not supported")
-    }
-    if !camera_caps.capabilities.contains(Flags::STREAMING) {
-        panic!("Camera: Streaming not supported")
-    }
+    //let camera_caps = camera.query_caps()?;
+    //if !camera_caps.capabilities.contains(Flags::VIDEO_CAPTURE) {
+    //    panic!("Camera: Capture not supported")
+    //}
+    //if !camera_caps.capabilities.contains(Flags::STREAMING) {
+    //    panic!("Camera: Streaming not supported")
+    //}
 
-    Capture::set_format(&mut camera, &camera_format)?;
-    Capture::set_params(&mut camera, &capture::Parameters::with_fps(fps))?;
+    //Capture::set_format(&mut camera, &camera_format)?;
+    //Capture::set_params(&mut camera, &capture::Parameters::with_fps(fps))?;
 
     let mut encoder = Device::new(encoder_device)?;
 
-    if !camera_caps.capabilities.contains(Flags::VIDEO_CAPTURE) {
+    let encoder_caps = encoder.query_caps()?;
+    println!("Encoder capabilities: {}", encoder_caps.capabilities);
+    if !encoder_caps.capabilities.contains(Flags::VIDEO_CAPTURE) {
         panic!("Encoder: Capture not supported")
     }
-    if !camera_caps.capabilities.contains(Flags::VIDEO_OUTPUT) {
+    if !encoder_caps.capabilities.contains(Flags::VIDEO_OUTPUT) {
         panic!("Encoder: Output not supported")
     }
-    if !camera_caps.capabilities.contains(Flags::STREAMING) {
+    if !encoder_caps.capabilities.contains(Flags::STREAMING) {
         panic!("Encoder: Streaming not supported")
     }
 
@@ -60,18 +62,20 @@ fn main() -> io::Result<()> {
     Capture::set_format(&mut encoder, &encoded_format)?;
     Output::set_params(&mut encoder, &output::Parameters::with_fps(fps))?;
 
-    let mut camera_stream = CaptureStream::with_device(&camera, 3)?;
+    //let mut camera_stream = CaptureStream::with_device(&camera, 3)?;
     let mut encoder_raw_stream = OutputStream::with_device(&encoder, 1)?;
     let mut encoder_encoded_queue = CaptureStream::with_device(&encoder, 1)?;
 
     let mut write_to = File::open("test.h264")?;
 
-    for _ in 0..100 {
+    for i in 0..100 {
         encoder_raw_stream.write_frame(|buffer| {
-            camera_stream.read_frame(|frame| {
-                buffer.copy_from_slice(frame);
-                Ok(frame.len())
-            })
+            //camera_stream.read_frame(|frame| {
+            //    buffer.copy_from_slice(frame);
+            //    Ok(frame.len())
+            //})
+            buffer[..640 * 480 * 3].fill(i);
+            Ok(640 * 480 * 3)
         })?;
 
         encoder_encoded_queue.read_frame(|buffer| {
@@ -80,7 +84,7 @@ fn main() -> io::Result<()> {
         })?;
     }
 
-    camera_stream.finish()?;
+    //camera_stream.finish()?;
     encoder_raw_stream.finish()?;
     encoder_encoded_queue.finish()?;
 
