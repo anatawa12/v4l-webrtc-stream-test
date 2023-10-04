@@ -100,6 +100,10 @@ fn main() -> io::Result<()> {
         //    Ok(())
         //}).unwrap();
     }
+    encoder_raw_stream1.stop()?;
+    encoder_encoded_stream1.stop()?;
+
+    write_to.flush()?;
 
     //camera_stream.finish().unwrap();
     //encoder_raw_stream.finish().unwrap();
