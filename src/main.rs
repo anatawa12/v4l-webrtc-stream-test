@@ -70,6 +70,7 @@ fn main() -> io::Result<()> {
 
     for i in 0..100 {
         println!("frame {i}");
+        OutputStream::poll(&encoder_raw_stream1).unwrap();
         let index = OutputStream::dequeue(&mut encoder_raw_stream1).unwrap();
         println!("frame {i}: deq");
         let (out_buffers, _meta, planes) = OutputStream::get(&mut encoder_raw_stream1, index).unwrap();
@@ -79,6 +80,7 @@ fn main() -> io::Result<()> {
         OutputStream::queue(&mut encoder_raw_stream1, index).unwrap();
         println!("frame {i}: que");
 
+        CaptureStream::poll(&encoder_encoded_stream1).unwrap();
         let index = CaptureStream::dequeue(&mut encoder_encoded_stream1).unwrap();
         println!("frame {i}: deq");
         let (out_buffers, _meta, planes) = CaptureStream::get(&encoder_encoded_stream1, index).unwrap();
