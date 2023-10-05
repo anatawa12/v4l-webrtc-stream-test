@@ -5,6 +5,8 @@ use std::io::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
 use tokio::sync::Notify;
 use v4l::prelude::*;
 use v4l::{Format, FourCC, Memory};
@@ -223,7 +225,9 @@ async fn main_() -> Result<()> {
     Ok(())
 }
 
-fn main() -> io::Result<()> {
+
+#[tokio::main]
+async fn main() -> io::Result<()> {
     println!("Hello, world!");
     let camera_device = 0;
     let encoder_device = 11;
@@ -233,7 +237,10 @@ fn main() -> io::Result<()> {
     let camera_fourcc = FourCC::new(b"YUYV");
     let encoded_fourcc = FourCC::new(b"H264");
 
+    let read_write: Interest = Interest::WRITABLE | Interest::READABLE;
+
     let mut camera = Device::new(camera_device).unwrap();
+    let camera_async_fd = AsyncFd::with_interest(camera.handle(), Interest::READABLE).expect("creating async fd for camera");
 
     let camera_caps = camera.query_caps().unwrap();
     if !camera_caps.capabilities.contains(Flags::VIDEO_CAPTURE) {
@@ -247,6 +254,7 @@ fn main() -> io::Result<()> {
     Capture::set_params(&mut camera, &capture::Parameters::with_fps(fps)).unwrap();
 
     let mut encoder = MultiPlaneDevice::new(encoder_device).unwrap();
+    let encoder_async_fd = AsyncFd::new(encoder.handle()).expect("creating async fd for encoder");
 
     let encoder_caps = encoder.query_caps().unwrap();
     println!("Encoder capabilities: {}", encoder_caps.capabilities);
@@ -279,17 +287,19 @@ fn main() -> io::Result<()> {
 
     let mut write_to = File::create("test.h264").unwrap();
 
+    let mut interval = tokio::time::interval(Duration::from_secs(1) / 15);
     for i in 0..512 {
         println!("frame {i}");
-        OutputStream::poll(&encoder_raw_stream1).unwrap();
-        let index = OutputStream::dequeue(&mut encoder_raw_stream1).unwrap();
+        let index = encoder_async_fd.async_io(read_write, |_| {
+            OutputStream::dequeue(&mut encoder_raw_stream1)
+        }).await.unwrap();
         println!("frame {i}: deq");
         let (out_buffers, _meta, planes) = OutputStream::get(&mut encoder_raw_stream1, index).unwrap();
 
         println!("frame {i}: cam polling");
-        CaptureStream::poll(&camera_stream).unwrap();
-        println!("frame {i}: cam dequeue");
-        let cam_index = CaptureStream::dequeue(&mut camera_stream).unwrap();
+        let cam_index = camera_async_fd.async_io(read_write, |_| {
+            CaptureStream::dequeue(&mut camera_stream)
+        }).await.unwrap();
         println!("frame {i}: cam getting");
         let (cam_buffers, cam_meta, _cam_planes) = CaptureStream::get(&camera_stream, cam_index).unwrap();
         let cam_len = cam_meta.length;
@@ -303,13 +313,16 @@ fn main() -> io::Result<()> {
         OutputStream::queue(&mut encoder_raw_stream1, index).unwrap();
         println!("frame {i}: que");
 
-        CaptureStream::poll(&encoder_encoded_stream1).unwrap();
-        let index = CaptureStream::dequeue(&mut encoder_encoded_stream1).unwrap();
+        let index = encoder_async_fd.async_io(read_write, |_| {
+            CaptureStream::dequeue(&mut encoder_encoded_stream1)
+        }).await.unwrap();
         println!("frame {i}: deq");
         let (out_buffers, _meta, planes) = CaptureStream::get(&encoder_encoded_stream1, index).unwrap();
         write_to.write(&out_buffers[0][..planes[0].bytesused as usize]).unwrap();
         CaptureStream::queue(&mut encoder_encoded_stream1, index).unwrap();
         println!("frame {i}: que");
+
+        interval.tick().await;
 
         //encoder_raw_stream.write_frame(|buffer| {
         //    //camera_stream.read_frame(|frame| {
