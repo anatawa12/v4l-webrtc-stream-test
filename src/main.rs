@@ -230,21 +230,21 @@ fn main() -> io::Result<()> {
     let fps = 10;
     let width = 640;
     let height = 480;
-    let camera_fourcc = FourCC::new(b"RGB3");
+    let camera_fourcc = FourCC::new(b"YUYV");
     let encoded_fourcc = FourCC::new(b"H264");
 
-    //let mut camera = Device::new(camera_device).unwrap();
+    let mut camera = Device::new(camera_device).unwrap();
 
-    //let camera_caps = camera.query_caps().unwrap();
-    //if !camera_caps.capabilities.contains(Flags::VIDEO_CAPTURE) {
-    //    panic!("Camera: Capture not supported")
-    //}
-    //if !camera_caps.capabilities.contains(Flags::STREAMING) {
-    //    panic!("Camera: Streaming not supported")
-    //}
+    let camera_caps = camera.query_caps().unwrap();
+    if !camera_caps.capabilities.contains(Flags::VIDEO_CAPTURE) {
+        panic!("Camera: Capture not supported")
+    }
+    if !camera_caps.capabilities.contains(Flags::STREAMING) {
+        panic!("Camera: Streaming not supported")
+    }
 
-    //Capture::set_format(&mut camera, &camera_format).unwrap();
-    //Capture::set_params(&mut camera, &capture::Parameters::with_fps(fps)).unwrap();
+    Capture::set_format(&mut camera, &Format::new(width, height, camera_fourcc)).unwrap();
+    Capture::set_params(&mut camera, &capture::Parameters::with_fps(fps)).unwrap();
 
     let mut encoder = MultiPlaneDevice::new(encoder_device).unwrap();
 
@@ -261,15 +261,19 @@ fn main() -> io::Result<()> {
     Capture::set_format(&mut encoder, &MultiPlaneFormat::single_plane(width, height, encoded_fourcc)).unwrap();
     Output::set_params(&mut encoder, &output::Parameters::with_fps(fps)).unwrap();
 
-    //let mut camera_stream = CaptureStream::with_device(&camera, 3).unwrap();
+    let mut camera_stream = MmapStream::with_buffers(&camera, Type::VideoCapture, 3).unwrap();
     let mut encoder_raw_stream1 = MmapStream::with_buffers(&encoder, Type::VideoOutputMplane, 1).unwrap();
     let mut encoder_encoded_stream1 = MmapStream::with_buffers(&encoder, Type::VideoCaptureMplane, 1).unwrap();
     //let mut encoder_raw_stream = MultiPlaneOutputStream::with_device(&encoder, 1).unwrap();
     //let mut encoder_encoded_queue = MultiPlaneCaptureStream::with_device(&encoder, 1).unwrap();
 
+    CaptureStream::queue(&mut camera_stream, 0).unwrap();
+    CaptureStream::queue(&mut camera_stream, 1).unwrap();
+    CaptureStream::queue(&mut camera_stream, 2).unwrap();
     OutputStream::queue(&mut encoder_raw_stream1, 0).unwrap();
     CaptureStream::queue(&mut encoder_encoded_stream1, 0).unwrap();
 
+    camera_stream.start().unwrap();
     encoder_raw_stream1.start().unwrap();
     encoder_encoded_stream1.start().unwrap();
 
@@ -281,8 +285,20 @@ fn main() -> io::Result<()> {
         let index = OutputStream::dequeue(&mut encoder_raw_stream1).unwrap();
         println!("frame {i}: deq");
         let (out_buffers, _meta, planes) = OutputStream::get(&mut encoder_raw_stream1, index).unwrap();
-        out_buffers[0][..640 * 480 * 3].fill((i & 0xFF) as u8);
-        planes[0].bytesused = 640 * 480 * 3;
+
+        println!("frame {i}: cam polling");
+        CaptureStream::poll(&camera_stream).unwrap();
+        println!("frame {i}: cam dequeue");
+        let cam_index = CaptureStream::dequeue(&mut camera_stream).unwrap();
+        println!("frame {i}: cam getting");
+        let (cam_buffers, cam_meta, _cam_planes) = CaptureStream::get(&camera_stream, cam_index).unwrap();
+        let cam_len = cam_meta.length;
+        let cam_buffer = &cam_buffers[0][..cam_len as usize];
+        out_buffers[0][..cam_len as usize].copy_from_slice(cam_buffer);
+        println!("frame {i}: cam queueing");
+        CaptureStream::queue(&mut camera_stream, cam_index).unwrap();
+
+        planes[0].bytesused = cam_len;
         println!("frame {i}: queueing");
         OutputStream::queue(&mut encoder_raw_stream1, index).unwrap();
         println!("frame {i}: que");
@@ -309,6 +325,7 @@ fn main() -> io::Result<()> {
         //    Ok(())
         //}).unwrap();
     }
+    camera_stream.stop()?;
     encoder_raw_stream1.stop()?;
     encoder_encoded_stream1.stop()?;
 
