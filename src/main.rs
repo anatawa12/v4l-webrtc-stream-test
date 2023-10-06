@@ -1,7 +1,9 @@
+mod nal_parser;
+
 use anyhow::Result;
 use std::fs::File;
 use std::io;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,7 +16,6 @@ use v4l::buffer::{Metadata, Type};
 use v4l::capability::Flags;
 use v4l::device::{Handle, MultiPlaneDevice};
 use v4l::format::MultiPlaneFormat;
-use v4l::io::mmap::stream;
 use v4l::io::Queue;
 use v4l::io::queue::Streaming;
 use v4l::io::traits::{CaptureStream, OutputStream, Stream};
@@ -26,7 +27,6 @@ use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
-use webrtc::media::io::h264_reader::H264Reader;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
@@ -34,9 +34,10 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
+use crate::nal_parser::H264Parser;
 
 #[tokio::main]
-async fn main_() -> Result<()> {
+async fn main() -> Result<()> {
     // Everything below is the WebRTC-rs API! Thanks for using it ❤️.
 
     // Create a MediaEngine object to configure the supported codec
@@ -106,9 +107,9 @@ async fn main_() -> Result<()> {
         let video_file_name = video_file.to_owned();
         tokio::spawn(async move {
             // Open a H264 file and start reading using our H264Reader
-            let file = File::open(&video_file_name)?;
-            let reader = io::BufReader::new(file);
-            let mut h264 = H264Reader::new(reader, 1_048_576);
+            let mut buffer = Vec::new();
+            File::open(&video_file_name)?.read_to_end(&mut buffer)?;
+            let mut h264 = H264Parser::new(buffer.as_slice());
 
             // Wait for connection established
             notify_video.notified().await;
@@ -119,11 +120,12 @@ async fn main_() -> Result<()> {
             // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
             // * works around latency issues with Sleep
             let mut ticker = tokio::time::interval(Duration::from_millis(66));
+            let mut i = 0;
             loop {
-                let nal = match h264.next_nal() {
-                    Ok(nal) => nal,
-                    Err(err) => {
-                        println!("All video frames parsed and sent: {err}");
+                let nal = match h264.next_buffer() {
+                    Some(nal) => nal,
+                    None => {
+                        println!("All video frames parsed and sent");
                         break;
                     }
                 };
@@ -136,10 +138,12 @@ async fn main_() -> Result<()> {
                     nal.unit_type,
                     nal.data.len()
                 );*/
+                println!("frame{i}");
+                i += 1;
 
                 video_track
                     .write_sample(&Sample {
-                        data: nal.data.freeze(),
+                        data: Vec::from(nal).into(),
                         duration: Duration::from_secs(1),
                         ..Default::default()
                     })
@@ -227,7 +231,7 @@ async fn main_() -> Result<()> {
 
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main_() -> io::Result<()> {
     println!("Hello, world!");
     let camera_device = 0;
     let encoder_device = 11;
