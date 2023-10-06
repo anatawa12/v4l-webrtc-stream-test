@@ -110,6 +110,21 @@ async fn main_() -> Result<()> {
             let reader = io::BufReader::new(file);
             let mut h264 = H264Reader::new(reader, 1_048_576);
 
+            let mut buffers = Vec::new();
+            let mut index = 0;
+            loop {
+                println!("parsing {index}");
+                match h264.next_nal() {
+                    Ok(nal) => buffers.push(nal),
+                    Err(err) => {
+                        println!("All video frames parsed: {err}");
+                        break;
+                    }
+                };
+                println!("parsed {index}");
+                index += 1;
+            }
+
             // Wait for connection established
             notify_video.notified().await;
 
@@ -118,15 +133,8 @@ async fn main_() -> Result<()> {
             // It is important to use a time.Ticker instead of time.Sleep because
             // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
             // * works around latency issues with Sleep
-            let mut ticker = tokio::time::interval(Duration::from_millis(66));
-            loop {
-                let nal = match h264.next_nal() {
-                    Ok(nal) => nal,
-                    Err(err) => {
-                        println!("All video frames parsed and sent: {err}");
-                        break;
-                    }
-                };
+            let mut ticker = tokio::time::interval(Duration::from_millis(100));
+            for nal in buffers {
 
                 /*println!(
                     "PictureOrderCount={}, ForbiddenZeroBit={}, RefIdc={}, UnitType={}, data={}",
