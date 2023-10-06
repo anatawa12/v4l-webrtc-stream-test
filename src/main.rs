@@ -106,10 +106,61 @@ async fn main() -> Result<()> {
 
         let video_file_name = video_file.to_owned();
         tokio::spawn(async move {
-            // Open a H264 file and start reading using our H264Reader
-            let mut buffer = Vec::new();
-            File::open(&video_file_name)?.read_to_end(&mut buffer)?;
-            let mut h264 = H264Parser::new(buffer.as_slice());
+            let camera_device = 0;
+            let encoder_device = 11;
+            let fps = 10;
+            let width = 640;
+            let height = 480;
+            let camera_fourcc = FourCC::new(b"YUYV");
+            let encoded_fourcc = FourCC::new(b"H264");
+
+            let read_write: Interest = Interest::WRITABLE | Interest::READABLE;
+
+            let mut camera = Device::new(camera_device).unwrap();
+            let camera_async_fd = AsyncFd::with_interest(camera.handle(), Interest::READABLE).expect("creating async fd for camera");
+
+            let camera_caps = camera.query_caps().unwrap();
+            if !camera_caps.capabilities.contains(Flags::VIDEO_CAPTURE) {
+                panic!("Camera: Capture not supported")
+            }
+            if !camera_caps.capabilities.contains(Flags::STREAMING) {
+                panic!("Camera: Streaming not supported")
+            }
+
+            Capture::set_format(&mut camera, &Format::new(width, height, camera_fourcc)).unwrap();
+            Capture::set_params(&mut camera, &capture::Parameters::with_fps(fps)).unwrap();
+
+            let mut encoder = MultiPlaneDevice::new(encoder_device).unwrap();
+            let encoder_async_fd = AsyncFd::new(encoder.handle()).expect("creating async fd for encoder");
+
+            let encoder_caps = encoder.query_caps().unwrap();
+            println!("Encoder capabilities: {}", encoder_caps.capabilities);
+            if !encoder_caps.capabilities.contains(Flags::VIDEO_M2M_MPLANE) {
+                panic!("Encoder: Capture not supported")
+            }
+            if !encoder_caps.capabilities.contains(Flags::STREAMING) {
+                panic!("Encoder: Streaming not supported")
+            }
+
+            Output::set_format(&mut encoder, &MultiPlaneFormat::single_plane(width, height, camera_fourcc)).unwrap();
+            Capture::set_format(&mut encoder, &MultiPlaneFormat::single_plane(width, height, encoded_fourcc)).unwrap();
+            Output::set_params(&mut encoder, &output::Parameters::with_fps(fps)).unwrap();
+
+            let mut camera_stream = MmapStream::with_buffers(&camera, Type::VideoCapture, 3).unwrap();
+            let mut encoder_raw_stream1 = MmapStream::with_buffers(&encoder, Type::VideoOutputMplane, 1).unwrap();
+            let mut encoder_encoded_stream1 = MmapStream::with_buffers(&encoder, Type::VideoCaptureMplane, 1).unwrap();
+            //let mut encoder_raw_stream = MultiPlaneOutputStream::with_device(&encoder, 1).unwrap();
+            //let mut encoder_encoded_queue = MultiPlaneCaptureStream::with_device(&encoder, 1).unwrap();
+
+            CaptureStream::queue(&mut camera_stream, 0).unwrap();
+            CaptureStream::queue(&mut camera_stream, 1).unwrap();
+            CaptureStream::queue(&mut camera_stream, 2).unwrap();
+            OutputStream::queue(&mut encoder_raw_stream1, 0).unwrap();
+            CaptureStream::queue(&mut encoder_encoded_stream1, 0).unwrap();
+
+            camera_stream.start().unwrap();
+            encoder_raw_stream1.start().unwrap();
+            encoder_encoded_stream1.start().unwrap();
 
             // Wait for connection established
             notify_video.notified().await;
@@ -119,16 +170,46 @@ async fn main() -> Result<()> {
             // It is important to use a time.Ticker instead of time.Sleep because
             // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
             // * works around latency issues with Sleep
-            let mut ticker = tokio::time::interval(Duration::from_millis(66));
-            let mut i = 0;
-            loop {
-                let nal = match h264.next_buffer() {
-                    Some(nal) => nal,
-                    None => {
-                        println!("All video frames parsed and sent");
-                        break;
-                    }
-                };
+            let interval = Duration::from_secs(1) / fps;
+            let mut ticker = tokio::time::interval(interval);
+            let mut frame = 0;
+            println!("interval: {interval:?}");
+            for _ in 0..1024 {
+                println!("frame0: {frame}");
+                frame += 1;
+
+                println!("frame {frame}");
+                let index = encoder_async_fd.async_io(read_write, |_| {
+                    OutputStream::dequeue(&mut encoder_raw_stream1)
+                }).await.unwrap();
+                println!("frame {frame}: deq");
+                let (out_buffers, _meta, planes) = OutputStream::get(&mut encoder_raw_stream1, index).unwrap();
+
+                println!("frame {frame}: cam polling");
+                let cam_index = camera_async_fd.async_io(read_write, |_| {
+                    CaptureStream::dequeue(&mut camera_stream)
+                }).await.unwrap();
+                println!("frame {frame}: cam getting");
+                let (cam_buffers, cam_meta, _cam_planes) = CaptureStream::get(&camera_stream, cam_index).unwrap();
+                let cam_len = cam_meta.length;
+                let cam_buffer = &cam_buffers[0][..cam_len as usize];
+                out_buffers[0][..cam_len as usize].copy_from_slice(cam_buffer);
+                println!("frame {frame}: cam queueing");
+                CaptureStream::queue(&mut camera_stream, cam_index).unwrap();
+
+                planes[0].bytesused = cam_len;
+                println!("frame {frame}: queueing");
+                OutputStream::queue(&mut encoder_raw_stream1, index).unwrap();
+                println!("frame {frame}: que");
+
+                let index = encoder_async_fd.async_io(read_write, |_| {
+                    CaptureStream::dequeue(&mut encoder_encoded_stream1)
+                }).await.unwrap();
+                println!("frame {frame}: deq");
+                let (out_buffers, _meta, planes) = CaptureStream::get(&encoder_encoded_stream1, index).unwrap();
+                let buffer = Vec::from(&out_buffers[0][..planes[0].bytesused as usize]);
+                CaptureStream::queue(&mut encoder_encoded_stream1, index).unwrap();
+                println!("frame {frame}: que");
 
                 /*println!(
                     "PictureOrderCount={}, ForbiddenZeroBit={}, RefIdc={}, UnitType={}, data={}",
@@ -138,19 +219,26 @@ async fn main() -> Result<()> {
                     nal.unit_type,
                     nal.data.len()
                 );*/
-                println!("frame{i}");
-                i += 1;
 
-                video_track
-                    .write_sample(&Sample {
-                        data: Vec::from(nal).into(),
-                        duration: Duration::from_secs(1),
-                        ..Default::default()
-                    })
-                    .await?;
+                let mut h264 = H264Parser::new(buffer.as_slice());
+                while let Some(nal) = h264.next_buffer() {
+                    video_track
+                        .write_sample(&Sample {
+                            data: Vec::from(nal).into(),
+                            duration: Duration::from_secs(1),
+                            ..Default::default()
+                        })
+                        .await?;
+                }
 
+                println!("frame1: {frame}");
                 let _ = ticker.tick().await;
+                println!("frame2: {frame}");
             }
+
+            camera_stream.stop()?;
+            encoder_raw_stream1.stop()?;
+            encoder_encoded_stream1.stop()?;
 
             let _ = video_done_tx.try_send(());
 
@@ -186,6 +274,7 @@ async fn main() -> Result<()> {
         Box::pin(async {})
     }));
 
+    println!("enter offer:");
     // Wait for the offer to be pasted
     let offer = io::read_to_string(io::stdin())?;
     let offer = RTCSessionDescription::offer(offer)?;
