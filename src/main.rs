@@ -296,7 +296,7 @@ async fn main() -> io::Result<()> {
     let mut write_to = File::create("test.h264").unwrap();
 
     let mut interval = tokio::time::interval(Duration::from_secs(1) / fps);
-    for i in 0..512 {
+    for i in 0..1000 {
         println!("frame {i}");
         let index = encoder_async_fd.async_io(read_write, |_| {
             OutputStream::dequeue(&mut encoder_raw_stream1)
@@ -326,7 +326,12 @@ async fn main() -> io::Result<()> {
         }).await.unwrap();
         println!("frame {i}: deq");
         let (out_buffers, _meta, planes) = CaptureStream::get(&encoder_encoded_stream1, index).unwrap();
-        write_to.write(&out_buffers[0][..planes[0].bytesused as usize]).unwrap();
+        let buffer = &out_buffers[0][..planes[0].bytesused as usize];
+        write_to.write(buffer).unwrap();
+        let mut frame = File::create(format!("frames/{i:4}.h264")).unwrap();
+        frame.write(buffer).unwrap();
+        frame.flush().unwrap();
+        drop(frame);
         CaptureStream::queue(&mut encoder_encoded_stream1, index).unwrap();
         println!("frame {i}: que");
 
