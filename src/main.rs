@@ -73,7 +73,6 @@ async fn main() -> Result<()> {
     let video_done_tx = done_tx.clone();
 
     {
-        let video_file = "test.h264";
         // Create a video track
         let video_track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
@@ -98,7 +97,6 @@ async fn main() -> Result<()> {
             Result::<()>::Ok(())
         });
 
-        let video_file_name = video_file.to_owned();
         tokio::spawn(async move {
             let camera_device = 0;
             let encoder_device = 11;
@@ -172,7 +170,7 @@ async fn main() -> Result<()> {
             // Wait for connection established
             notify_video.notified().await;
 
-            println!("play video from disk file {video_file_name}");
+            println!("play video from camera");
 
             // It is important to use a time.Ticker instead of time.Sleep because
             // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
