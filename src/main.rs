@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::fs::File;
 use std::io;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,6 +34,33 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
+
+// split into multiple NALs
+fn main1() -> Result<()> {
+    let file = File::open("test.h264")?;
+    let reader = io::BufReader::new(file);
+    let mut h264 = H264Reader::new(reader, 1_048_576);
+
+    let mut index = 0;
+    loop {
+        println!("parsing {index}");
+        match h264.next_nal() {
+            Ok(nal) => {
+                let mut frame = File::create(format!("nals/{index:04}.bin")).unwrap();
+                frame.write(nal.data.as_ref())?;
+                frame.flush()?
+            }
+            Err(err) => {
+                println!("All video frames parsed: {err}");
+                break;
+            }
+        };
+        println!("parsed {index}");
+        index += 1;
+    }
+
+    Ok(())
+}
 
 #[tokio::main]
 async fn main_() -> Result<()> {
@@ -78,7 +105,6 @@ async fn main_() -> Result<()> {
     let video_done_tx = done_tx.clone();
 
      {
-         let video_file = "test.h264";
         // Create a video track
         let video_track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
@@ -103,32 +129,29 @@ async fn main_() -> Result<()> {
             Result::<()>::Ok(())
         });
 
-        let video_file_name = video_file.to_owned();
         tokio::spawn(async move {
             // Open a H264 file and start reading using our H264Reader
-            let file = File::open(&video_file_name)?;
-            let reader = io::BufReader::new(file);
-            let mut h264 = H264Reader::new(reader, 1_048_576);
 
+            let mut file_names = Vec::new();
+            let mut dir = tokio::fs::read_dir("nals").await?;
+            while let Some(entry) = dir.next_entry().await? {
+                file_names.push(entry.path());
+            }
+            file_names.sort();
             let mut buffers = Vec::new();
-            let mut index = 0;
-            loop {
-                println!("parsing {index}");
-                match h264.next_nal() {
-                    Ok(nal) => buffers.push(nal),
-                    Err(err) => {
-                        println!("All video frames parsed: {err}");
-                        break;
-                    }
-                };
-                println!("parsed {index}");
-                index += 1;
+            for path in file_names {
+                let mut buf = Vec::new();
+                use tokio::io::AsyncReadExt;
+                tokio::fs::File::open(&path).await?
+                    .read_to_end(&mut buf).await?;
+                buffers.push(bytes::Bytes::from(buf));
+                println!("read {}", path.display());
             }
 
             // Wait for connection established
             notify_video.notified().await;
 
-            println!("play video from disk file {video_file_name}");
+            println!("play video from nals");
 
             // It is important to use a time.Ticker instead of time.Sleep because
             // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
@@ -147,7 +170,7 @@ async fn main_() -> Result<()> {
 
                 video_track
                     .write_sample(&Sample {
-                        data: nal.data.freeze(),
+                        data: nal,
                         duration: Duration::from_secs(1),
                         ..Default::default()
                     })

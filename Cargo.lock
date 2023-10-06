@@ -1082,6 +1082,7 @@ name = "piterphone-pi-rs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "tokio",
  "v4l",
  "webrtc",
