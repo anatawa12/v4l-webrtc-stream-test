@@ -295,7 +295,7 @@ async fn main() -> io::Result<()> {
 
     let mut write_to = File::create("test.h264").unwrap();
 
-    let mut interval = tokio::time::interval(Duration::from_secs(1) / 15);
+    let mut interval = tokio::time::interval(Duration::from_secs(1) / fps);
     for i in 0..512 {
         println!("frame {i}");
         let index = encoder_async_fd.async_io(read_write, |_| {
