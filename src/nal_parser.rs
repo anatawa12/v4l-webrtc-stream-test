@@ -2,11 +2,9 @@ pub struct H264Parser<'a> {
     buffer: &'a [u8],
 }
 
-impl <'a> H264Parser<'a> {
+impl<'a> H264Parser<'a> {
     pub fn new(buffer: &'a [u8]) -> Self {
-        Self {
-            buffer
-        }
+        Self { buffer }
     }
 
     pub fn next_buffer(&mut self) -> Option<&'a [u8]> {
@@ -36,11 +34,7 @@ impl <'a> H264Parser<'a> {
             match self.buffer[index] {
                 0 => zero_count += 1,
                 1 if zero_count >= 2 => {
-                    let header = if zero_count == 2 {
-                        2
-                    } else {
-                        3
-                    };
+                    let header = if zero_count == 2 { 2 } else { 3 };
 
                     let (nal, rest) = self.buffer.split_at(index - header);
                     self.buffer = rest;

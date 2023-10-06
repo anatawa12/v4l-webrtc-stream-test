@@ -1,23 +1,24 @@
 mod nal_parser;
 
+use crate::nal_parser::H264Parser;
 use anyhow::Result;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
+use tokio::io::Interest;
 use tokio::sync::Notify;
-use v4l::prelude::*;
-use v4l::{Format, FourCC};
 use v4l::buffer::Type;
 use v4l::capability::Flags;
 use v4l::device::MultiPlaneDevice;
 use v4l::format::MultiPlaneFormat;
 use v4l::io::traits::{CaptureStream, OutputStream, Stream};
-use v4l::video::{Capture, capture, Output, output};
-use webrtc::api::APIBuilder;
+use v4l::prelude::*;
+use v4l::video::{capture, output, Capture, Output};
+use v4l::{Format, FourCC};
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
+use webrtc::api::APIBuilder;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
@@ -28,7 +29,6 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
-use crate::nal_parser::H264Parser;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -72,8 +72,8 @@ async fn main() -> Result<()> {
     let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
     let video_done_tx = done_tx.clone();
 
-     {
-         let video_file = "test.h264";
+    {
+        let video_file = "test.h264";
         // Create a video track
         let video_track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
@@ -111,7 +111,8 @@ async fn main() -> Result<()> {
             let read_write: Interest = Interest::WRITABLE | Interest::READABLE;
 
             let mut camera = Device::new(camera_device).unwrap();
-            let camera_async_fd = AsyncFd::with_interest(camera.handle(), Interest::READABLE).expect("creating async fd for camera");
+            let camera_async_fd = AsyncFd::with_interest(camera.handle(), Interest::READABLE)
+                .expect("creating async fd for camera");
 
             let camera_caps = camera.query_caps().unwrap();
             if !camera_caps.capabilities.contains(Flags::VIDEO_CAPTURE) {
@@ -125,7 +126,8 @@ async fn main() -> Result<()> {
             Capture::set_params(&mut camera, &capture::Parameters::with_fps(fps)).unwrap();
 
             let mut encoder = MultiPlaneDevice::new(encoder_device).unwrap();
-            let encoder_async_fd = AsyncFd::new(encoder.handle()).expect("creating async fd for encoder");
+            let encoder_async_fd =
+                AsyncFd::new(encoder.handle()).expect("creating async fd for encoder");
 
             let encoder_caps = encoder.query_caps().unwrap();
             println!("Encoder capabilities: {}", encoder_caps.capabilities);
@@ -136,13 +138,24 @@ async fn main() -> Result<()> {
                 panic!("Encoder: Streaming not supported")
             }
 
-            Output::set_format(&mut encoder, &MultiPlaneFormat::single_plane(width, height, camera_fourcc)).unwrap();
-            Capture::set_format(&mut encoder, &MultiPlaneFormat::single_plane(width, height, encoded_fourcc)).unwrap();
+            Output::set_format(
+                &mut encoder,
+                &MultiPlaneFormat::single_plane(width, height, camera_fourcc),
+            )
+            .unwrap();
+            Capture::set_format(
+                &mut encoder,
+                &MultiPlaneFormat::single_plane(width, height, encoded_fourcc),
+            )
+            .unwrap();
             Output::set_params(&mut encoder, &output::Parameters::with_fps(fps)).unwrap();
 
-            let mut camera_stream = MmapStream::with_buffers(&camera, Type::VideoCapture, 3).unwrap();
-            let mut encoder_raw_stream1 = MmapStream::with_buffers(&encoder, Type::VideoOutputMplane, 1).unwrap();
-            let mut encoder_encoded_stream1 = MmapStream::with_buffers(&encoder, Type::VideoCaptureMplane, 1).unwrap();
+            let mut camera_stream =
+                MmapStream::with_buffers(&camera, Type::VideoCapture, 3).unwrap();
+            let mut encoder_raw_stream1 =
+                MmapStream::with_buffers(&encoder, Type::VideoOutputMplane, 1).unwrap();
+            let mut encoder_encoded_stream1 =
+                MmapStream::with_buffers(&encoder, Type::VideoCaptureMplane, 1).unwrap();
             //let mut encoder_raw_stream = MultiPlaneOutputStream::with_device(&encoder, 1).unwrap();
             //let mut encoder_encoded_queue = MultiPlaneCaptureStream::with_device(&encoder, 1).unwrap();
 
@@ -173,18 +186,24 @@ async fn main() -> Result<()> {
                 frame += 1;
 
                 println!("frame {frame}");
-                let index = encoder_async_fd.async_io(read_write, |_| {
-                    OutputStream::dequeue(&mut encoder_raw_stream1)
-                }).await.unwrap();
+                let index = encoder_async_fd
+                    .async_io(read_write, |_| {
+                        OutputStream::dequeue(&mut encoder_raw_stream1)
+                    })
+                    .await
+                    .unwrap();
                 println!("frame {frame}: deq");
-                let (out_buffers, _meta, planes) = OutputStream::get(&mut encoder_raw_stream1, index).unwrap();
+                let (out_buffers, _meta, planes) =
+                    OutputStream::get(&mut encoder_raw_stream1, index).unwrap();
 
                 println!("frame {frame}: cam polling");
-                let cam_index = camera_async_fd.async_io(read_write, |_| {
-                    CaptureStream::dequeue(&mut camera_stream)
-                }).await.unwrap();
+                let cam_index = camera_async_fd
+                    .async_io(read_write, |_| CaptureStream::dequeue(&mut camera_stream))
+                    .await
+                    .unwrap();
                 println!("frame {frame}: cam getting");
-                let (cam_buffers, cam_meta, _cam_planes) = CaptureStream::get(&camera_stream, cam_index).unwrap();
+                let (cam_buffers, cam_meta, _cam_planes) =
+                    CaptureStream::get(&camera_stream, cam_index).unwrap();
                 let cam_len = cam_meta.length;
                 let cam_buffer = &cam_buffers[0][..cam_len as usize];
                 out_buffers[0][..cam_len as usize].copy_from_slice(cam_buffer);
@@ -196,11 +215,15 @@ async fn main() -> Result<()> {
                 OutputStream::queue(&mut encoder_raw_stream1, index).unwrap();
                 println!("frame {frame}: que");
 
-                let index = encoder_async_fd.async_io(read_write, |_| {
-                    CaptureStream::dequeue(&mut encoder_encoded_stream1)
-                }).await.unwrap();
+                let index = encoder_async_fd
+                    .async_io(read_write, |_| {
+                        CaptureStream::dequeue(&mut encoder_encoded_stream1)
+                    })
+                    .await
+                    .unwrap();
                 println!("frame {frame}: deq");
-                let (out_buffers, _meta, planes) = CaptureStream::get(&encoder_encoded_stream1, index).unwrap();
+                let (out_buffers, _meta, planes) =
+                    CaptureStream::get(&encoder_encoded_stream1, index).unwrap();
                 let buffer = Vec::from(&out_buffers[0][..planes[0].bytesused as usize]);
                 CaptureStream::queue(&mut encoder_encoded_stream1, index).unwrap();
                 println!("frame {frame}: que");
