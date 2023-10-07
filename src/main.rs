@@ -43,6 +43,9 @@ struct Cli {
     /// Capture & streaming FPS
     #[clap(long, default_value = "15")]
     fps: u32,
+    /// Size of capture buffer
+    #[clap(long, default_value = "3")]
+    capture_buffer: u32,
 
     /// Capture & Streaming video width
     #[clap(long, default_value = "640")]
@@ -139,6 +142,7 @@ async fn main() -> Result<()> {
                 parsed.camera_device,
                 parsed.encoder_device,
                 parsed.fps,
+                parsed.capture_buffer,
                 parsed.width,
                 parsed.height,
                 &parsed.camera_fourcc.0,

@@ -24,6 +24,7 @@ impl<'a> CameraCapture<'a> {
         camera_device: usize,
         encoder_device: usize,
         fps: u32,
+        capture_buffer: u32,
         width: u32,
         height: u32,
         camera_fourcc: &[u8; 4],
@@ -79,15 +80,16 @@ impl<'a> CameraCapture<'a> {
         )?;
         Output::set_params(&mut encoder, &output::Parameters::with_fps(fps))?;
 
-        let mut camera_stream = MmapStream::with_buffers(&camera, Type::VideoCapture, 3)?;
+        let mut camera_stream =
+            MmapStream::with_buffers(&camera, Type::VideoCapture, capture_buffer)?;
         let mut encoder_raw_stream1 =
             MmapStream::with_buffers(&encoder, Type::VideoOutputMplane, 1)?;
         let mut encoder_encoded_stream1 =
             MmapStream::with_buffers(&encoder, Type::VideoCaptureMplane, 1)?;
 
-        CaptureStream::queue(&mut camera_stream, 0)?;
-        CaptureStream::queue(&mut camera_stream, 1)?;
-        CaptureStream::queue(&mut camera_stream, 2)?;
+        for i in 0..capture_buffer {
+            CaptureStream::queue(&mut camera_stream, i)?;
+        }
         OutputStream::queue(&mut encoder_raw_stream1, 0)?;
         CaptureStream::queue(&mut encoder_encoded_stream1, 0)?;
 
