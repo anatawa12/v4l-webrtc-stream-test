@@ -6,6 +6,8 @@
 // or https://github.com/webrtc-rs/webrtc/blob/982829bffe07c61bce660b20499d9148861e0224/examples/LICENSE-APACHE
 // for more details about original license
 
+// You can use https://jsfiddle.net/8j26fhxk/ as browser side
+
 mod camera_capture;
 mod nal_parser;
 
