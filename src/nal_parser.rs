@@ -1,5 +1,8 @@
 use std::fmt::Formatter;
 
+/// I created H264 NALs parser because H264Reader in webrtc crate is
+/// too slow to use for real-time use.
+
 pub struct H264Parser<'a> {
     buffer: &'a [u8],
 }
