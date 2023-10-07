@@ -4,4 +4,4 @@ REMOTE="interphone-2.remote"
 EXEC="$1"
 shift
 
-rsync --progress "$EXEC" "$REMOTE":piterphone-pi-rs && exec ssh "$REMOTE" "./piterphone-pi-rs" "$@"
+rsync --progress "$EXEC" "$REMOTE":piterphone-pi-rs && exec ssh -t "$REMOTE" "./piterphone-pi-rs" "$@"

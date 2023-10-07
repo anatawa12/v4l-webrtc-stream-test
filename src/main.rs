@@ -12,6 +12,7 @@ mod nal_parser;
 use crate::camera_capture::CameraCapture;
 use crate::nal_parser::H264Parser;
 use anyhow::Result;
+use clap::Parser;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,9 +31,45 @@ use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
+#[derive(clap::Parser)]
+struct Cli {
+    /// The capture device to be streamed
+    #[clap(long, default_value = "0")]
+    camera_device: usize,
+    /// The hw encoder device
+    #[clap(long, default_value = "11")]
+    encoder_device: usize,
+
+    /// Capture & streaming FPS
+    #[clap(long, default_value = "15")]
+    fps: u32,
+
+    /// Capture & Streaming video width
+    #[clap(long, default_value = "640")]
+    width: u32,
+    /// Capture & Streaming video width
+    #[clap(long, default_value = "480")]
+    height: u32,
+
+    /// FourCC to use capture & input format of encoder
+    #[clap(long, default_value = "YUYV")]
+    camera_fourcc: FourCC,
+}
+
+#[derive(Copy, Clone)]
+struct FourCC([u8; 4]);
+
+impl clap::builder::ValueParserFactory for FourCC {
+    type Parser = clap::builder::ValueParser;
+
+    fn value_parser() -> Self::Parser {
+        Self::Parser::new(|str: &str| <[u8; 4]>::try_from(str.as_bytes()).map(FourCC))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Everything below is the WebRTC-rs API! Thanks for using it ❤️.
+    let parsed = Cli::parse();
 
     // Create a MediaEngine object to configure the supported codec
     let mut m = MediaEngine::default();
@@ -98,22 +135,14 @@ async fn main() -> Result<()> {
         });
 
         tokio::spawn(async move {
-            let camera_device: usize = 0;
-            let encoder_device: usize = 11;
-            let fps: u32 = 10;
-            let width: u32 = 640;
-            let height: u32 = 480;
-            let camera_fourcc = b"YUYV";
-            let encoded_fourcc = b"H264";
-
             let mut capture = CameraCapture::new(
-                camera_device,
-                encoder_device,
-                fps,
-                width,
-                height,
-                camera_fourcc,
-                encoded_fourcc,
+                parsed.camera_device,
+                parsed.encoder_device,
+                parsed.fps,
+                parsed.width,
+                parsed.height,
+                &parsed.camera_fourcc.0,
+                b"H264",
             )?;
 
             // Wait for connection established
@@ -126,11 +155,11 @@ async fn main() -> Result<()> {
             // It is important to use a time.Ticker instead of time.Sleep because
             // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
             // * works around latency issues with Sleep
-            let interval = Duration::from_secs(1) / fps;
+            let interval = Duration::from_secs(1) / parsed.fps;
             let mut ticker = tokio::time::interval(interval);
             let mut frame = 0;
             println!("interval: {interval:?}");
-            for _ in 0..1024 {
+            loop {
                 println!("frame0: {frame}");
                 frame += 1;
 
