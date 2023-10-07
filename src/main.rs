@@ -1,3 +1,11 @@
+// this file is based on https://github.com/webrtc-rs/webrtc/blob/982829bffe07c61bce660b20499d9148861e0224/examples/examples/play-from-disk-h264/play-from-disk-h264.rs
+// but plays media from v4l2 capture device and encode to h264 with v4l2 hw encoder device.
+// originally published under MIT or Apache 2.0
+// Copyright (c) 2021 WebRTC.rs
+// see https://github.com/webrtc-rs/webrtc/blob/982829bffe07c61bce660b20499d9148861e0224/examples/LICENSE-MIT
+// or https://github.com/webrtc-rs/webrtc/blob/982829bffe07c61bce660b20499d9148861e0224/examples/LICENSE-APACHE
+// for more details about original license
+
 mod nal_parser;
 mod camera_capture;
 
