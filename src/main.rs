@@ -112,6 +112,8 @@ async fn main() -> Result<()> {
     let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
     let video_done_tx = done_tx.clone();
 
+    let connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
     {
         // Create a video track
         let video_track = Arc::new(TrackLocalStaticSample::new(
@@ -123,10 +125,13 @@ async fn main() -> Result<()> {
             "webrtc-rs".to_owned(),
         ));
 
+        let connected = connected.clone();
+
         // Add this newly created track to the PeerConnection
         let rtp_sender = peer_connection
             .add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>)
             .await?;
+        let rtp_sender_1 = rtp_sender.clone();
 
         // Read incoming RTCP packets
         // Before these packets are returned they are processed by interceptors. For things
@@ -163,7 +168,7 @@ async fn main() -> Result<()> {
             let mut ticker = tokio::time::interval(interval);
             let mut frame = 0;
             println!("interval: {interval:?}");
-            loop {
+            while connected.load(std::sync::atomic::Ordering::Relaxed) {
                 println!("frame0: {frame}");
                 frame += 1;
 
@@ -195,6 +200,7 @@ async fn main() -> Result<()> {
             }
 
             capture.stop()?;
+            rtp_sender_1.stop().await?;
 
             let _ = video_done_tx.try_send(());
 
@@ -265,7 +271,9 @@ async fn main() -> Result<()> {
             println!("received done signal!");
         }
         _ = tokio::signal::ctrl_c() => {
-            println!();
+            println!("ctrl_c");
+            connected.store(false, std::sync::atomic::Ordering::Relaxed);
+            done_rx.recv().await;
         }
     };
 
