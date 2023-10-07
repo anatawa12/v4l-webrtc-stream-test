@@ -166,12 +166,7 @@ async fn main() -> Result<()> {
             // * works around latency issues with Sleep
             let interval = Duration::from_secs(1) / parsed.fps;
             let mut ticker = tokio::time::interval(interval);
-            let mut frame = 0;
-            println!("interval: {interval:?}");
             while connected.load(std::sync::atomic::Ordering::Relaxed) {
-                println!("frame0: {frame}");
-                frame += 1;
-
                 let buffer = capture.take_frame().await?;
 
                 /*println!(
@@ -194,9 +189,7 @@ async fn main() -> Result<()> {
                         .await?;
                 }
 
-                println!("frame1: {frame}");
                 let _ = ticker.tick().await;
-                println!("frame2: {frame}");
             }
 
             capture.stop()?;
