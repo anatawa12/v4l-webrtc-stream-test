@@ -88,7 +88,7 @@ impl<'a> CameraCapture<'a> {
             MmapStream::with_buffers(&encoder, Type::VideoCaptureMplane, 1)?;
 
         for i in 0..capture_buffer {
-            CaptureStream::queue(&mut camera_stream, i)?;
+            CaptureStream::queue(&mut camera_stream, i as usize)?;
         }
         OutputStream::queue(&mut encoder_raw_stream1, 0)?;
         CaptureStream::queue(&mut encoder_encoded_stream1, 0)?;
