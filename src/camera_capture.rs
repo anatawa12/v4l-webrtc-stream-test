@@ -19,7 +19,7 @@ pub struct CameraCapture<'a> {
     encoder_encoded_stream1: MmapStream<'a>,
 }
 
-impl <'a> CameraCapture<'a> {
+impl<'a> CameraCapture<'a> {
     pub fn new(
         camera_device: usize,
         encoder_device: usize,
@@ -41,7 +41,11 @@ impl <'a> CameraCapture<'a> {
             panic!("Camera: Streaming not supported")
         }
 
-        Capture::set_format(&mut camera, &Format::new(width, height, FourCC::new(camera_fourcc))).unwrap();
+        Capture::set_format(
+            &mut camera,
+            &Format::new(width, height, FourCC::new(camera_fourcc)),
+        )
+        .unwrap();
         Capture::set_params(&mut camera, &capture::Parameters::with_fps(fps)).unwrap();
 
         let mut encoder = MultiPlaneDevice::new(encoder_device).unwrap();
@@ -61,16 +65,15 @@ impl <'a> CameraCapture<'a> {
             &mut encoder,
             &MultiPlaneFormat::single_plane(width, height, FourCC::new(camera_fourcc)),
         )
-            .unwrap();
+        .unwrap();
         Capture::set_format(
             &mut encoder,
             &MultiPlaneFormat::single_plane(width, height, FourCC::new(encoded_fourcc)),
         )
-            .unwrap();
+        .unwrap();
         Output::set_params(&mut encoder, &output::Parameters::with_fps(fps)).unwrap();
 
-        let mut camera_stream =
-            MmapStream::with_buffers(&camera, Type::VideoCapture, 3).unwrap();
+        let mut camera_stream = MmapStream::with_buffers(&camera, Type::VideoCapture, 3).unwrap();
         let mut encoder_raw_stream1 =
             MmapStream::with_buffers(&encoder, Type::VideoOutputMplane, 1).unwrap();
         let mut encoder_encoded_stream1 =
@@ -96,7 +99,8 @@ impl<'a> CameraCapture<'a> {
     pub async fn take_frame(&mut self) -> io::Result<Vec<u8>> {
         let read_write: Interest = Interest::WRITABLE | Interest::READABLE;
         println!("frame");
-        let index = self.encoder_async_fd
+        let index = self
+            .encoder_async_fd
             .async_io(read_write, |_| {
                 OutputStream::dequeue(&mut self.encoder_raw_stream1)
             })
@@ -107,8 +111,11 @@ impl<'a> CameraCapture<'a> {
             OutputStream::get(&mut self.encoder_raw_stream1, index).unwrap();
 
         println!("frame: cam polling");
-        let cam_index = self.camera_async_fd
-            .async_io(read_write, |_| CaptureStream::dequeue(&mut self.camera_stream))
+        let cam_index = self
+            .camera_async_fd
+            .async_io(read_write, |_| {
+                CaptureStream::dequeue(&mut self.camera_stream)
+            })
             .await
             .unwrap();
         println!("frame: cam getting");
@@ -125,7 +132,8 @@ impl<'a> CameraCapture<'a> {
         OutputStream::queue(&mut self.encoder_raw_stream1, index).unwrap();
         println!("frame: que");
 
-        let index = self.encoder_async_fd
+        let index = self
+            .encoder_async_fd
             .async_io(read_write, |_| {
                 CaptureStream::dequeue(&mut self.encoder_encoded_stream1)
             })

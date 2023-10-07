@@ -16,13 +16,13 @@ impl<'a> H264Parser<'a> {
 
         // 0x00_00_01 or 0x00_00_00_01
         if self.buffer.len() < 3 || self.buffer[0] != 0 || self.buffer[1] != 0 {
-            return Err(H264ParserError::InvalidHeader)
+            return Err(H264ParserError::InvalidHeader);
         }
         match self.buffer[2] {
             1 => self.buffer = &self.buffer[3..],
             0 => {
                 if self.buffer.len() < 4 || self.buffer[3] != 1 {
-                    return Err(H264ParserError::InvalidHeader)
+                    return Err(H264ParserError::InvalidHeader);
                 }
                 self.buffer = &self.buffer[4..]
             }
@@ -57,13 +57,12 @@ pub enum H264ParserError {
     InvalidHeader,
 }
 
-impl std::error::Error for H264ParserError {
-}
+impl std::error::Error for H264ParserError {}
 
 impl std::fmt::Display for H264ParserError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            H264ParserError::InvalidHeader => f.write_str("Invalid NAL Header")
+            H264ParserError::InvalidHeader => f.write_str("Invalid NAL Header"),
         }
     }
 }

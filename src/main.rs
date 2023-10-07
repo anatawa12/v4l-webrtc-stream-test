@@ -6,9 +6,10 @@
 // or https://github.com/webrtc-rs/webrtc/blob/982829bffe07c61bce660b20499d9148861e0224/examples/LICENSE-APACHE
 // for more details about original license
 
-mod nal_parser;
 mod camera_capture;
+mod nal_parser;
 
+use crate::camera_capture::CameraCapture;
 use crate::nal_parser::H264Parser;
 use anyhow::Result;
 use std::io;
@@ -28,7 +29,6 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
-use crate::camera_capture::CameraCapture;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -106,7 +106,15 @@ async fn main() -> Result<()> {
             let camera_fourcc = b"YUYV";
             let encoded_fourcc = b"H264";
 
-            let mut capture = CameraCapture::new(camera_device, encoder_device, fps, width, height, camera_fourcc, encoded_fourcc)?;
+            let mut capture = CameraCapture::new(
+                camera_device,
+                encoder_device,
+                fps,
+                width,
+                height,
+                camera_fourcc,
+                encoded_fourcc,
+            )?;
 
             // Wait for connection established
             notify_video.notified().await;
@@ -125,7 +133,6 @@ async fn main() -> Result<()> {
             for _ in 0..1024 {
                 println!("frame0: {frame}");
                 frame += 1;
-
 
                 let buffer = capture.take_frame().await?;
 
