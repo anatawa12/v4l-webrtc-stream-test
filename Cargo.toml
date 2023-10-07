@@ -1,5 +1,5 @@
 [package]
-name = "piterphone-pi-rs"
+name = "v4l-webrtc-stream-test"
 version = "0.1.0"
 edition = "2021"
 
