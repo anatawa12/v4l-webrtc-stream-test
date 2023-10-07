@@ -131,7 +131,7 @@ async fn main() -> Result<()> {
                 );*/
 
                 let mut h264 = H264Parser::new(buffer.as_slice());
-                while let Some(nal) = h264.next_buffer() {
+                while let Some(nal) = h264.next_buffer()? {
                     video_track
                         .write_sample(&Sample {
                             data: Vec::from(nal).into(),

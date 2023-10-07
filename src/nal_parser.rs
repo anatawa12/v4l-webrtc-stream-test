@@ -1,3 +1,5 @@
+use std::fmt::Formatter;
+
 pub struct H264Parser<'a> {
     buffer: &'a [u8],
 }
@@ -7,24 +9,24 @@ impl<'a> H264Parser<'a> {
         Self { buffer }
     }
 
-    pub fn next_buffer(&mut self) -> Option<&'a [u8]> {
+    pub fn next_buffer(&mut self) -> Result<Option<&'a [u8]>, H264ParserError> {
         if self.buffer.len() == 0 {
-            return None;
+            return Ok(None);
         }
 
         // 0x00_00_01 or 0x00_00_00_01
         if self.buffer.len() < 3 || self.buffer[0] != 0 || self.buffer[1] != 0 {
-            panic!("invalid NAL header")
+            return Err(H264ParserError::InvalidHeader)
         }
         match self.buffer[2] {
             1 => self.buffer = &self.buffer[3..],
             0 => {
                 if self.buffer.len() < 4 || self.buffer[3] != 1 {
-                    panic!("invalid NAL header")
+                    return Err(H264ParserError::InvalidHeader)
                 }
                 self.buffer = &self.buffer[4..]
             }
-            _ => panic!("invalid NAL header"),
+            _ => return Err(H264ParserError::InvalidHeader),
         }
 
         //let mut
@@ -38,13 +40,30 @@ impl<'a> H264Parser<'a> {
 
                     let (nal, rest) = self.buffer.split_at(index - header);
                     self.buffer = rest;
-                    return Some(nal);
+                    return Ok(Some(nal));
                 }
                 _ => zero_count = 0,
             }
             index += 1
         }
 
-        Some(std::mem::replace(&mut self.buffer, &[]))
+        Ok(Some(std::mem::replace(&mut self.buffer, &[])))
+    }
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum H264ParserError {
+    InvalidHeader,
+}
+
+impl std::error::Error for H264ParserError {
+}
+
+impl std::fmt::Display for H264ParserError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            H264ParserError::InvalidHeader => f.write_str("Invalid NAL Header")
+        }
     }
 }
