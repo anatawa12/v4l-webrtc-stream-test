@@ -20,11 +20,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc::api::APIBuilder;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
+use webrtc::media::io::ogg_reader::OggReader;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
@@ -110,6 +111,7 @@ async fn main() -> Result<()> {
 
     let notify_tx = Arc::new(Notify::new());
     let notify_video = notify_tx.clone();
+    let notify_audio = notify_tx.clone();
 
     let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
     let video_done_tx = done_tx.clone();
@@ -198,6 +200,79 @@ async fn main() -> Result<()> {
             rtp_sender_1.stop().await?;
 
             let _ = video_done_tx.try_send(());
+
+            Result::<()>::Ok(())
+        });
+    }
+
+    {
+        let connected = connected.clone();
+
+        // Create a audio track
+        let audio_track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_OPUS.to_owned(),
+                ..Default::default()
+            },
+            "audio".to_owned(),
+            "webrtc-rs".to_owned(),
+        ));
+
+        // Add this newly created track to the PeerConnection
+        let rtp_sender = peer_connection
+            .add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
+            .await?;
+
+        // Read incoming RTCP packets
+        // Before these packets are returned they are processed by interceptors. For things
+        // like NACK this needs to be called.
+        tokio::spawn(async move {
+            let mut rtcp_buf = vec![0u8; 1500];
+            while let Ok((_, _)) = rtp_sender.read(&mut rtcp_buf).await {}
+            Result::<()>::Ok(())
+        });
+
+        tokio::spawn(async move {
+            // Open a IVF file and start reading using our IVFReader
+            let file = std::fs::File::open("test.ogg").unwrap();
+            let reader = io::BufReader::new(file);
+            // Open on oggfile in non-checksum mode.
+            let (mut ogg, _) = OggReader::new(reader, true).unwrap();
+
+            // Wait for connection established
+            notify_audio.notified().await;
+
+            println!("play audio from disk file test.ogg");
+
+            const OGG_PAGE_DURATION: Duration = Duration::from_millis(20);
+
+            // It is important to use a time.Ticker instead of time.Sleep because
+            // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
+            // * works around latency issues with Sleep
+            let mut ticker = tokio::time::interval(OGG_PAGE_DURATION);
+
+            // Keep track of last granule, the difference is the amount of samples in the buffer
+            let mut last_granule: u64 = 0;
+            while let Ok((page_data, page_header)) = ogg.parse_next_page() {
+                if !connected.load(std::sync::atomic::Ordering::Relaxed) {
+                    break
+                }
+
+                // The amount of samples is the difference between the last and current timestamp
+                let sample_count = page_header.granule_position - last_granule;
+                last_granule = page_header.granule_position;
+                let sample_duration = Duration::from_millis(sample_count * 1000 / 48000);
+
+                audio_track
+                    .write_sample(&Sample {
+                        data: page_data.freeze(),
+                        duration: sample_duration,
+                        ..Default::default()
+                    })
+                    .await?;
+
+                let _ = ticker.tick().await;
+            }
 
             Result::<()>::Ok(())
         });
