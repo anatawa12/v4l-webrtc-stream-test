@@ -22,6 +22,8 @@ use std::io;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
+use ogg::PacketWriteEndInfo;
+use opus::{Application, Bitrate, Channels, Encoder};
 use tokio::sync::Notify;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
@@ -39,35 +41,99 @@ use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSampl
 use webrtc::track::track_local::TrackLocal;
 
 fn main() -> Result<()> {
+    const SAMPLE_RATE: u32 = 48000;
+    const BIT_RATE: i32 = 128_000;
+    const FRAME_MS: u32 = 20;
+
     let pcm = PCM::new("plughw:1,0", Direction::Capture, false)?;
     let params = HwParams::any(&pcm).unwrap();
     params.set_rate_resample(true)?;
     params.set_access(Access::RWInterleaved)?; // TODO
     params.set_channels(1)?;
-    params.set_rate(48000, ValueOr::Nearest)?;
+    params.set_rate(SAMPLE_RATE, ValueOr::Nearest)?;
     params.set_format(Format::s16())?;
     pcm.hw_params(&params)?;
     drop(params);
 
     pcm.prepare()?;
 
-    let io = pcm.io_i16()?;
-    let mut out = std::fs::File::create("test.pcm")?;
+    let serial = std::process::id();
 
-    let mut buffer = [0i16; 48000 / (1000 / 20)];
-    let buffer_as_bytes =
-        unsafe { std::slice::from_raw_parts::<u8>(buffer.as_ptr() as _, buffer.len() * 2) };
-    for i in 0..(50 * 60) {
+    let io = pcm.io_i16()?;
+    let mut out = std::fs::File::create("test.opus")?;
+    let mut ogg_writer = ogg::PacketWriter::new(out);
+
+    let mut opus_encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip)?;
+    opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE))?;
+
+    let lookahead = opus_encoder.get_lookahead()?;
+
+    let mut opus_head: [u8; 19] = [
+        b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', // Magic header
+        1, // Version number, always 1
+        1, // Channels
+        0, 0,//Pre-skip
+        0, 0, 0, 0, // Original Hz (informational)
+        0, 0, // Output gain
+        0, // Channel map family
+        // If Channel map != 0, here should go channel mapping table
+    ];
+
+    opus_head[10..12].copy_from_slice(&(lookahead as u16).to_le_bytes());
+    opus_head[12..16].copy_from_slice(&(SAMPLE_RATE as u32).to_le_bytes());
+
+    ogg_writer.write_packet(
+        Vec::from(opus_head),
+        serial,
+        PacketWriteEndInfo::EndPage,
+        0
+    )?;
+
+    ogg_writer.write_packet(
+        Vec::from(&b"OpusTags\0\0\0\x084l2_test\0\0\0\0"[..]),
+        serial,
+        PacketWriteEndInfo::EndPage,
+        0
+    )?;
+
+    const SAMPLE_PER_FRAME: u32 = SAMPLE_RATE / (1000 / FRAME_MS);
+    let mut buffer = [0i16; SAMPLE_PER_FRAME as usize];
+    let mut encoded_buffer = [0u8; BIT_RATE as usize / 8 / (1000 / FRAME_MS as usize)];
+    for i in 0..(50 * 10) {
         let read = io.readi(&mut buffer)?;
         println!(
             "read {read} frames. expect {} frames {i}",
             48000 / (1000 / 20)
         );
 
-        out.write_all(buffer_as_bytes)?;
+        let encoded = opus_encoder.encode(&buffer, &mut encoded_buffer)?;
+        ogg_writer.write_packet(
+            Vec::from(&encoded_buffer[..encoded]),
+            serial,
+            PacketWriteEndInfo::EndPage,
+            lookahead as u64 + SAMPLE_PER_FRAME as u64 * i as u64
+        )?;
     }
 
-    out.flush()?;
+    {
+
+        let read = io.readi(&mut buffer)?;
+        println!(
+            "read {read} frames. expect {} frames, last",
+            48000 / (1000 / 20)
+        );
+
+        let encoded = opus_encoder.encode(&buffer, &mut encoded_buffer)?;
+        ogg_writer.write_packet(
+            Vec::from(&encoded_buffer[..encoded]),
+            serial,
+            PacketWriteEndInfo::EndStream,
+            0
+        )?;
+    }
+
+    ogg_writer.inner_mut().flush()?;
+    drop(ogg_writer);
 
     drop(io);
     drop(pcm); // close

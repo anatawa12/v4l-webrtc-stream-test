@@ -200,6 +200,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "audiopus_sys"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62314a1546a2064e033665d658e88c620a62904be945f8147e6b16c3db9f8651"
+dependencies = [
+ "cmake",
+ "log",
+ "pkg-config",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -423,6 +434,15 @@ name = "clap_lex"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd7cc57abe963c6d3b9d8be5b06ba7c8957a930305ca90304f24ef040aa6f961"
+
+[[package]]
+name = "cmake"
+version = "0.1.50"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a31c789563b815f77f4250caee12365734369f942439b7defd71e18a48197130"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "colorchoice"
@@ -1089,6 +1109,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ogg"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "960d0efc0531a452c442c777288f704b300a5f743c04a14eba71f9aabc4897ac"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "oid-registry"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1108,6 +1137,16 @@ name = "opaque-debug"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
+
+[[package]]
+name = "opus"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6526409b274a7e98e55ff59d96aafd38e6cd34d46b7dbbc32ce126dffcd75e8e"
+dependencies = [
+ "audiopus_sys",
+ "libc",
+]
 
 [[package]]
 name = "p256"
@@ -1930,6 +1969,8 @@ dependencies = [
  "alsa",
  "anyhow",
  "clap",
+ "ogg",
+ "opus",
  "tokio",
  "v4l",
  "webrtc",
