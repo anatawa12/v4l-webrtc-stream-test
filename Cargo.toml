@@ -9,7 +9,6 @@ edition = "2021"
 alsa = "0.8.0"
 anyhow = "1.0.75"
 clap = { version = "4.4.6", features = ["derive"] }
-ogg = "0.9.0"
 opus = "0.3.0"
 tokio = "1.32.0"
 v4l = { path = "./libv4l-rs" }

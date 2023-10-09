@@ -1109,15 +1109,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ogg"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "960d0efc0531a452c442c777288f704b300a5f743c04a14eba71f9aabc4897ac"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
 name = "oid-registry"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1969,7 +1960,6 @@ dependencies = [
  "alsa",
  "anyhow",
  "clap",
- "ogg",
  "opus",
  "tokio",
  "v4l",

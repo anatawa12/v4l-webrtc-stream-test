@@ -15,15 +15,13 @@ use crate::camera_capture::CameraCapture;
 use crate::nal_parser::H264Parser;
 use alsa::pcm::HwParams;
 use alsa::pcm::{Access, Format};
-use alsa::{pcm, Direction, ValueOr, PCM};
+use alsa::{Direction, ValueOr, PCM};
 use anyhow::Result;
 use clap::Parser;
+use opus::{Application, Bitrate, Channels, Encoder};
 use std::io;
-use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
-use ogg::PacketWriteEndInfo;
-use opus::{Application, Bitrate, Channels, Encoder};
 use tokio::sync::Notify;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
@@ -31,7 +29,6 @@ use webrtc::api::APIBuilder;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
-use webrtc::media::io::ogg_reader::OggReader;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
@@ -39,107 +36,6 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
-
-fn main() -> Result<()> {
-    const SAMPLE_RATE: u32 = 48000;
-    const BIT_RATE: i32 = 128_000;
-    const FRAME_MS: u32 = 20;
-
-    let pcm = PCM::new("plughw:1,0", Direction::Capture, false)?;
-    let params = HwParams::any(&pcm).unwrap();
-    params.set_rate_resample(true)?;
-    params.set_access(Access::RWInterleaved)?; // TODO
-    params.set_channels(1)?;
-    params.set_rate(SAMPLE_RATE, ValueOr::Nearest)?;
-    params.set_format(Format::s16())?;
-    pcm.hw_params(&params)?;
-    drop(params);
-
-    pcm.prepare()?;
-
-    let serial = std::process::id();
-
-    let io = pcm.io_i16()?;
-    let mut out = std::fs::File::create("test.opus")?;
-    let mut ogg_writer = ogg::PacketWriter::new(out);
-
-    let mut opus_encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip)?;
-    opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE))?;
-
-    let lookahead = opus_encoder.get_lookahead()?;
-
-    let mut opus_head: [u8; 19] = [
-        b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', // Magic header
-        1, // Version number, always 1
-        1, // Channels
-        0, 0,//Pre-skip
-        0, 0, 0, 0, // Original Hz (informational)
-        0, 0, // Output gain
-        0, // Channel map family
-        // If Channel map != 0, here should go channel mapping table
-    ];
-
-    opus_head[10..12].copy_from_slice(&(lookahead as u16).to_le_bytes());
-    opus_head[12..16].copy_from_slice(&(SAMPLE_RATE as u32).to_le_bytes());
-
-    ogg_writer.write_packet(
-        Vec::from(opus_head),
-        serial,
-        PacketWriteEndInfo::EndPage,
-        0
-    )?;
-
-    ogg_writer.write_packet(
-        Vec::from(&b"OpusTags\0\0\0\x084l2_test\0\0\0\0"[..]),
-        serial,
-        PacketWriteEndInfo::EndPage,
-        0
-    )?;
-
-    const SAMPLE_PER_FRAME: u32 = SAMPLE_RATE / (1000 / FRAME_MS);
-    let mut buffer = [0i16; SAMPLE_PER_FRAME as usize];
-    let mut encoded_buffer = [0u8; BIT_RATE as usize / 8 / (1000 / FRAME_MS as usize)];
-    for i in 0..(50 * 10) {
-        let read = io.readi(&mut buffer)?;
-        println!(
-            "read {read} frames. expect {} frames {i}",
-            48000 / (1000 / 20)
-        );
-
-        let encoded = opus_encoder.encode(&buffer, &mut encoded_buffer)?;
-        ogg_writer.write_packet(
-            Vec::from(&encoded_buffer[..encoded]),
-            serial,
-            PacketWriteEndInfo::EndPage,
-            lookahead as u64 + SAMPLE_PER_FRAME as u64 * i as u64
-        )?;
-    }
-
-    {
-
-        let read = io.readi(&mut buffer)?;
-        println!(
-            "read {read} frames. expect {} frames, last",
-            48000 / (1000 / 20)
-        );
-
-        let encoded = opus_encoder.encode(&buffer, &mut encoded_buffer)?;
-        ogg_writer.write_packet(
-            Vec::from(&encoded_buffer[..encoded]),
-            serial,
-            PacketWriteEndInfo::EndStream,
-            0
-        )?;
-    }
-
-    ogg_writer.inner_mut().flush()?;
-    drop(ogg_writer);
-
-    drop(io);
-    drop(pcm); // close
-
-    Ok(())
-}
 
 #[derive(clap::Parser)]
 struct Cli {
@@ -180,7 +76,6 @@ impl clap::builder::ValueParserFactory for FourCC {
     }
 }
 
-#[cfg(any())]
 #[tokio::main]
 async fn main() -> Result<()> {
     let parsed = Cli::parse();
@@ -340,12 +235,41 @@ async fn main() -> Result<()> {
             Result::<()>::Ok(())
         });
 
-        tokio::spawn(async move {
-            // Open a IVF file and start reading using our IVFReader
-            let file = std::fs::File::open("test.ogg").unwrap();
-            let reader = io::BufReader::new(file);
-            // Open on oggfile in non-checksum mode.
-            let (mut ogg, _) = OggReader::new(reader, true).unwrap();
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(on_thread(audio_track, notify_audio, connected))
+        });
+        //local.spawn_local()
+        async fn on_thread(
+            audio_track: Arc<TrackLocalStaticSample>,
+            notify_audio: Arc<Notify>,
+            connected: Arc<std::sync::atomic::AtomicBool>,
+        ) -> Result<()> {
+            const SAMPLE_RATE: u32 = 48000;
+            const BIT_RATE: i32 = 28_000;
+            const FRAME_MS: u32 = 20;
+
+            let pcm = PCM::new("plughw:1,0", Direction::Capture, false)?;
+            let params = HwParams::any(&pcm).unwrap();
+            params.set_rate_resample(true)?;
+            params.set_access(Access::RWInterleaved)?;
+            params.set_channels(1)?;
+            params.set_rate(SAMPLE_RATE, ValueOr::Nearest)?;
+            params.set_format(Format::s16())?;
+            pcm.hw_params(&params)?;
+            drop(params);
+
+            pcm.prepare()?;
+
+            let io = pcm.io_i16()?;
+
+            let mut opus_encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip)?;
+            opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE))?;
+
+            const SAMPLE_PER_FRAME: u32 = SAMPLE_RATE / (1000 / FRAME_MS);
 
             // Wait for connection established
             notify_audio.notified().await;
@@ -360,20 +284,26 @@ async fn main() -> Result<()> {
             let mut ticker = tokio::time::interval(OGG_PAGE_DURATION);
 
             // Keep track of last granule, the difference is the amount of samples in the buffer
-            let mut last_granule: u64 = 0;
-            while let Ok((page_data, page_header)) = ogg.parse_next_page() {
+            loop {
                 if !connected.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
 
+                let mut buffer = [0i16; SAMPLE_PER_FRAME as usize];
+                let read = io.readi(&mut buffer)?;
+                let buffer = &buffer[..read];
+
+                let mut encoded_buffer = [0u8; BIT_RATE as usize / 8 / (1000 / FRAME_MS as usize)];
+                let encoded = opus_encoder.encode(buffer, &mut encoded_buffer)?;
+                let encoded_buffer = &encoded_buffer[..encoded];
+
                 // The amount of samples is the difference between the last and current timestamp
-                let sample_count = page_header.granule_position - last_granule;
-                last_granule = page_header.granule_position;
-                let sample_duration = Duration::from_millis(sample_count * 1000 / 48000);
+                let sample_duration =
+                    Duration::from_millis(buffer.len() as u64 * 1000 / SAMPLE_RATE as u64);
 
                 audio_track
                     .write_sample(&Sample {
-                        data: page_data.freeze(),
+                        data: Vec::from(encoded_buffer).into(),
                         duration: sample_duration,
                         ..Default::default()
                     })
@@ -382,8 +312,11 @@ async fn main() -> Result<()> {
                 let _ = ticker.tick().await;
             }
 
+            drop(io);
+            drop(pcm); // close
+
             Result::<()>::Ok(())
-        });
+        }
     }
 
     // Set the handler for ICE connection state
