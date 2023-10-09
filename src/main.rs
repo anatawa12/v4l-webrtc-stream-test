@@ -235,36 +235,23 @@ async fn main() -> Result<()> {
             Result::<()>::Ok(())
         });
 
-        std::thread::spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(on_thread(audio_track, notify_audio, connected))
-        });
-        //local.spawn_local()
-        async fn on_thread(
-            audio_track: Arc<TrackLocalStaticSample>,
-            notify_audio: Arc<Notify>,
-            connected: Arc<std::sync::atomic::AtomicBool>,
-        ) -> Result<()> {
+        tokio::spawn(async move {
             const SAMPLE_RATE: u32 = 48000;
             const BIT_RATE: i32 = 28_000;
             const FRAME_MS: u32 = 20;
 
             let pcm = PCM::new("plughw:1,0", Direction::Capture, false)?;
-            let params = HwParams::any(&pcm).unwrap();
-            params.set_rate_resample(true)?;
-            params.set_access(Access::RWInterleaved)?;
-            params.set_channels(1)?;
-            params.set_rate(SAMPLE_RATE, ValueOr::Nearest)?;
-            params.set_format(Format::s16())?;
-            pcm.hw_params(&params)?;
-            drop(params);
+            {
+                let params = HwParams::any(&pcm).unwrap();
+                params.set_rate_resample(true)?;
+                params.set_access(Access::RWInterleaved)?;
+                params.set_channels(1)?;
+                params.set_rate(SAMPLE_RATE, ValueOr::Nearest)?;
+                params.set_format(Format::s16())?;
+                pcm.hw_params(&params)?;
+            }
 
             pcm.prepare()?;
-
-            let io = pcm.io_i16()?;
 
             let mut opus_encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip)?;
             opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE))?;
@@ -290,7 +277,8 @@ async fn main() -> Result<()> {
                 }
 
                 let mut buffer = [0i16; SAMPLE_PER_FRAME as usize];
-                let read = io.readi(&mut buffer)?;
+                // https://github.com/diwic/alsa-rs/issues/111
+                let read = pcm.io_i16()?.readi(&mut buffer)?;
                 let buffer = &buffer[..read];
 
                 let mut encoded_buffer = [0u8; BIT_RATE as usize / 8 / (1000 / FRAME_MS as usize)];
@@ -312,11 +300,10 @@ async fn main() -> Result<()> {
                 let _ = ticker.tick().await;
             }
 
-            drop(io);
             drop(pcm); // close
 
             Result::<()>::Ok(())
-        }
+        });
     }
 
     // Set the handler for ICE connection state
