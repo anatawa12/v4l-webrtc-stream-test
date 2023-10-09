@@ -13,9 +13,13 @@ mod nal_parser;
 
 use crate::camera_capture::CameraCapture;
 use crate::nal_parser::H264Parser;
+use alsa::pcm::HwParams;
+use alsa::pcm::{Access, Format};
+use alsa::{pcm, Direction, ValueOr, PCM};
 use anyhow::Result;
 use clap::Parser;
 use std::io;
+use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -33,6 +37,43 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
+
+fn main() -> Result<()> {
+    let pcm = PCM::new("plughw:1,0", Direction::Capture, false)?;
+    let params = HwParams::any(&pcm).unwrap();
+    params.set_rate_resample(true)?;
+    params.set_access(Access::RWInterleaved)?; // TODO
+    params.set_channels(1)?;
+    params.set_rate(48000, ValueOr::Nearest)?;
+    params.set_format(Format::s16())?;
+    pcm.hw_params(&params)?;
+    drop(params);
+
+    pcm.prepare()?;
+
+    let io = pcm.io_i16()?;
+    let mut out = std::fs::File::create("test.pcm")?;
+
+    let mut buffer = [0i16; 48000 / (1000 / 20)];
+    let buffer_as_bytes =
+        unsafe { std::slice::from_raw_parts::<u8>(buffer.as_ptr() as _, buffer.len() * 2) };
+    for i in 0..(50 * 60) {
+        let read = io.readi(&mut buffer)?;
+        println!(
+            "read {read} frames. expect {} frames {i}",
+            48000 / (1000 / 20)
+        );
+
+        out.write_all(buffer_as_bytes)?;
+    }
+
+    out.flush()?;
+
+    drop(io);
+    drop(pcm); // close
+
+    Ok(())
+}
 
 #[derive(clap::Parser)]
 struct Cli {
@@ -73,6 +114,7 @@ impl clap::builder::ValueParserFactory for FourCC {
     }
 }
 
+#[cfg(any())]
 #[tokio::main]
 async fn main() -> Result<()> {
     let parsed = Cli::parse();
@@ -255,7 +297,7 @@ async fn main() -> Result<()> {
             let mut last_granule: u64 = 0;
             while let Ok((page_data, page_header)) = ogg.parse_next_page() {
                 if !connected.load(std::sync::atomic::Ordering::Relaxed) {
-                    break
+                    break;
                 }
 
                 // The amount of samples is the difference between the last and current timestamp
