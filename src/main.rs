@@ -9,16 +9,14 @@
 // You can use https://jsfiddle.net/8j26fhxk/ as browser side
 
 mod camera_capture;
+mod monaural_audio_capture;
 mod nal_parser;
 
 use crate::camera_capture::CameraCapture;
+use crate::monaural_audio_capture::MonauralAudioCapture;
 use crate::nal_parser::H264Parser;
-use alsa::pcm::HwParams;
-use alsa::pcm::{Access, Format};
-use alsa::{Direction, ValueOr, PCM};
 use anyhow::Result;
 use clap::Parser;
-use opus::{Application, Bitrate, Channels, Encoder};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -241,21 +239,8 @@ async fn main() -> Result<()> {
             const FRAME_MS: u32 = 20;
             const SAMPLE_PER_FRAME: u32 = SAMPLE_RATE * FRAME_MS / 1000;
 
-            let pcm = PCM::new("plughw:1,0", Direction::Capture, false)?;
-            {
-                let params = HwParams::any(&pcm).unwrap();
-                params.set_rate_resample(true)?;
-                params.set_access(Access::RWInterleaved)?;
-                params.set_channels(1)?;
-                params.set_rate(SAMPLE_RATE, ValueOr::Nearest)?;
-                params.set_format(Format::s16())?;
-                pcm.hw_params(&params)?;
-            }
-
-            pcm.prepare()?;
-
-            let mut opus_encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip)?;
-            opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE))?;
+            let mut capture =
+                MonauralAudioCapture::new("plughw:1,0", SAMPLE_RATE, BIT_RATE, FRAME_MS)?;
 
             // Wait for connection established
             notify_audio.notified().await;
@@ -268,28 +253,14 @@ async fn main() -> Result<()> {
             let mut ticker = tokio::time::interval(Duration::from_millis(FRAME_MS as u64));
 
             // Keep track of last granule, the difference is the amount of samples in the buffer
-            loop {
-                if !connected.load(std::sync::atomic::Ordering::Relaxed) {
-                    break;
-                }
-
-                let mut buffer = [0i16; SAMPLE_PER_FRAME as usize];
-                // https://github.com/diwic/alsa-rs/issues/111
-                let read = pcm.io_i16()?.readi(&mut buffer)?;
-                let buffer = &buffer[..read];
-
-                let mut encoded_buffer = [0u8; BIT_RATE as usize / 8 / (1000 / FRAME_MS as usize)];
-                let encoded = opus_encoder.encode(buffer, &mut encoded_buffer)?;
-                let encoded_buffer = &encoded_buffer[..encoded];
+            while connected.load(std::sync::atomic::Ordering::Relaxed) {
+                let (duration, encoded_buffer) = capture.capture_frame()?;
 
                 // The amount of samples is the difference between the last and current timestamp
-                let sample_duration =
-                    Duration::from_millis(buffer.len() as u64 * 1000 / SAMPLE_RATE as u64);
-
                 audio_track
                     .write_sample(&Sample {
                         data: Vec::from(encoded_buffer).into(),
-                        duration: sample_duration,
+                        duration,
                         ..Default::default()
                     })
                     .await?;
@@ -297,7 +268,7 @@ async fn main() -> Result<()> {
                 let _ = ticker.tick().await;
             }
 
-            drop(pcm); // close
+            drop(capture); // close
 
             Result::<()>::Ok(())
         });
