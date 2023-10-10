@@ -239,6 +239,7 @@ async fn main() -> Result<()> {
             const SAMPLE_RATE: u32 = 48000;
             const BIT_RATE: i32 = 28_000;
             const FRAME_MS: u32 = 20;
+            const SAMPLE_PER_FRAME: u32 = SAMPLE_RATE * FRAME_MS / 1000;
 
             let pcm = PCM::new("plughw:1,0", Direction::Capture, false)?;
             {
@@ -256,19 +257,15 @@ async fn main() -> Result<()> {
             let mut opus_encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip)?;
             opus_encoder.set_bitrate(Bitrate::Bits(BIT_RATE))?;
 
-            const SAMPLE_PER_FRAME: u32 = SAMPLE_RATE / (1000 / FRAME_MS);
-
             // Wait for connection established
             notify_audio.notified().await;
 
             println!("play audio from disk file test.ogg");
 
-            const OGG_PAGE_DURATION: Duration = Duration::from_millis(20);
-
             // It is important to use a time.Ticker instead of time.Sleep because
             // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
             // * works around latency issues with Sleep
-            let mut ticker = tokio::time::interval(OGG_PAGE_DURATION);
+            let mut ticker = tokio::time::interval(Duration::from_millis(FRAME_MS as u64));
 
             // Keep track of last granule, the difference is the amount of samples in the buffer
             loop {
