@@ -9,9 +9,11 @@
 // You can use https://jsfiddle.net/8j26fhxk/ as browser side
 
 mod camera_capture;
+mod monaural_audio_capture;
 mod nal_parser;
 
 use crate::camera_capture::CameraCapture;
+use crate::monaural_audio_capture::MonauralAudioCapture;
 use crate::nal_parser::H264Parser;
 use anyhow::Result;
 use clap::Parser;
@@ -20,7 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264};
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc::api::APIBuilder;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::ice_transport::ice_server::RTCIceServer;
@@ -59,6 +61,20 @@ struct Cli {
     /// FourCC to use capture & input format of encoder
     #[clap(long, default_value = "YUYV")]
     camera_fourcc: FourCC,
+
+    // audio options
+    /// Sampling rate of capture (Hz)
+    #[clap(long, default_value = "48000")]
+    sample_rate: u32,
+    /// Bitrate of audio (bit per second)
+    #[clap(long, default_value = "28_000")]
+    bit_rate: u32,
+    /// Length of audio capture frame (milliseconds)
+    #[clap(long, default_value = "28_000")]
+    frame_ms: u32,
+    /// Audio Device Name
+    #[clap(long, default_value = "plughw:1,0")]
+    audio_device: String,
 }
 
 #[derive(Copy, Clone)]
@@ -110,6 +126,7 @@ async fn main() -> Result<()> {
 
     let notify_tx = Arc::new(Notify::new());
     let notify_video = notify_tx.clone();
+    let notify_audio = notify_tx.clone();
 
     let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
     let video_done_tx = done_tx.clone();
@@ -198,6 +215,73 @@ async fn main() -> Result<()> {
             rtp_sender_1.stop().await?;
 
             let _ = video_done_tx.try_send(());
+
+            Result::<()>::Ok(())
+        });
+    }
+
+    {
+        let connected = connected.clone();
+
+        // Create a audio track
+        let audio_track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_OPUS.to_owned(),
+                ..Default::default()
+            },
+            "audio".to_owned(),
+            "webrtc-rs".to_owned(),
+        ));
+
+        // Add this newly created track to the PeerConnection
+        let rtp_sender = peer_connection
+            .add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
+            .await?;
+
+        // Read incoming RTCP packets
+        // Before these packets are returned they are processed by interceptors. For things
+        // like NACK this needs to be called.
+        tokio::spawn(async move {
+            let mut rtcp_buf = vec![0u8; 1500];
+            while let Ok((_, _)) = rtp_sender.read(&mut rtcp_buf).await {}
+            Result::<()>::Ok(())
+        });
+
+        tokio::spawn(async move {
+            let mut capture =
+                MonauralAudioCapture::new(
+                    &parsed.audio_device, 
+                    parsed.sample_rate,
+                    parsed.bit_rate as i32,
+                    parsed.frame_ms)?;
+
+            // Wait for connection established
+            notify_audio.notified().await;
+
+            println!("play audio from disk file test.ogg");
+
+            // It is important to use a time.Ticker instead of time.Sleep because
+            // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
+            // * works around latency issues with Sleep
+            let mut ticker = tokio::time::interval(Duration::from_millis(parsed.frame_ms as u64));
+
+            // Keep track of last granule, the difference is the amount of samples in the buffer
+            while connected.load(std::sync::atomic::Ordering::Relaxed) {
+                let (duration, encoded_buffer) = capture.capture_frame()?;
+
+                // The amount of samples is the difference between the last and current timestamp
+                audio_track
+                    .write_sample(&Sample {
+                        data: Vec::from(encoded_buffer).into(),
+                        duration,
+                        ..Default::default()
+                    })
+                    .await?;
+
+                let _ = ticker.tick().await;
+            }
+
+            drop(capture); // close
 
             Result::<()>::Ok(())
         });
