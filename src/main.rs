@@ -61,6 +61,20 @@ struct Cli {
     /// FourCC to use capture & input format of encoder
     #[clap(long, default_value = "YUYV")]
     camera_fourcc: FourCC,
+
+    // audio options
+    /// Sampling rate of capture (Hz)
+    #[clap(long, default_value = "48000")]
+    sample_rate: u32,
+    /// Bitrate of audio (bit per second)
+    #[clap(long, default_value = "28_000")]
+    bit_rate: u32,
+    /// Length of audio capture frame (milliseconds)
+    #[clap(long, default_value = "28_000")]
+    frame_ms: u32,
+    /// Audio Device Name
+    #[clap(long, default_value = "plughw:1,0")]
+    audio_device: String,
 }
 
 #[derive(Copy, Clone)]
@@ -234,13 +248,12 @@ async fn main() -> Result<()> {
         });
 
         tokio::spawn(async move {
-            const SAMPLE_RATE: u32 = 48000;
-            const BIT_RATE: i32 = 28_000;
-            const FRAME_MS: u32 = 20;
-            const SAMPLE_PER_FRAME: u32 = SAMPLE_RATE * FRAME_MS / 1000;
-
             let mut capture =
-                MonauralAudioCapture::new("plughw:1,0", SAMPLE_RATE, BIT_RATE, FRAME_MS)?;
+                MonauralAudioCapture::new(
+                    &parsed.audio_device, 
+                    parsed.sample_rate,
+                    parsed.bit_rate as i32,
+                    parsed.frame_ms)?;
 
             // Wait for connection established
             notify_audio.notified().await;
@@ -250,7 +263,7 @@ async fn main() -> Result<()> {
             // It is important to use a time.Ticker instead of time.Sleep because
             // * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
             // * works around latency issues with Sleep
-            let mut ticker = tokio::time::interval(Duration::from_millis(FRAME_MS as u64));
+            let mut ticker = tokio::time::interval(Duration::from_millis(parsed.frame_ms as u64));
 
             // Keep track of last granule, the difference is the amount of samples in the buffer
             while connected.load(std::sync::atomic::Ordering::Relaxed) {

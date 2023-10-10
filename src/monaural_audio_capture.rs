@@ -66,8 +66,8 @@ impl MonauralAudioCapture {
         let mut opus_encoder = Encoder::new(sample_rate, Channels::Mono, Application::Voip)?;
         opus_encoder.set_bitrate(Bitrate::Bits(bit_rate))?;
 
-        let mut capture_buffer = vec![0i16; (sample_rate * frame_ms / 1000) as usize];
-        let mut encoded_buffer = vec![0u8; bit_rate as usize / 8 / (1000 / frame_ms as usize)];
+        let capture_buffer = vec![0i16; (sample_rate * frame_ms / 1000) as usize];
+        let encoded_buffer = vec![0u8; bit_rate as usize / 8 / (1000 / frame_ms as usize)];
         Ok(Self {
             pcm,
             opus_encoder,
