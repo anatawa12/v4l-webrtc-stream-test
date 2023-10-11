@@ -67,10 +67,10 @@ struct Cli {
     #[clap(long, default_value = "48000")]
     sample_rate: u32,
     /// Bitrate of audio (bit per second)
-    #[clap(long, default_value = "28_000")]
+    #[clap(long, default_value = "28000")]
     bit_rate: u32,
     /// Length of audio capture frame (milliseconds)
-    #[clap(long, default_value = "28_000")]
+    #[clap(long, default_value = "20")]
     frame_ms: u32,
     /// Audio Device Name
     #[clap(long, default_value = "plughw:1,0")]
