@@ -81,6 +81,14 @@ struct Cli {
     /// Audio Device Name
     #[clap(long, default_value = "plughw:1,0")]
     audio_device: String,
+
+    // speaker options
+    /// Speaker Sampling rate of capture (Hz)
+    #[clap(long, default_value = "48000")]
+    speaker_sample_rate: u32,
+    /// Speaker Audio Device Name
+    #[clap(long, default_value = "default")]
+    speaker_audio_device: String,
 }
 
 #[derive(Copy, Clone)]
@@ -94,8 +102,6 @@ impl clap::builder::ValueParserFactory for FourCC {
     }
 }
 
-const RECEIVE_SAMPLE_RATE: u32 = 48000;
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let parsed = Cli::parse();
@@ -103,7 +109,7 @@ async fn main() -> Result<()> {
     // Create a MediaEngine object to configure the supported codec
     let mut m = MediaEngine::default();
 
-    media_engine(&mut m)?;
+    media_engine(&mut m, &[parsed.speaker_sample_rate, parsed.sample_rate])?;
 
     // Create a InterceptorRegistry. This is the user configurable RTP/RTCP Pipeline.
     // This provides NACKs, RTCP Reports and other features. If you use `webrtc.NewPeerConnection`
@@ -298,6 +304,7 @@ async fn main() -> Result<()> {
     }
 
     let pc = Arc::downgrade(&peer_connection);
+    let speaker_audio_device = parsed.speaker_audio_device;
     peer_connection.on_track(Box::new(move |track, _, _| {
         // Send a PLI on an interval so that the publisher is pushing a keyframe every rtcpPLIInterval
         let media_ssrc = track.ssrc();
@@ -323,13 +330,17 @@ async fn main() -> Result<()> {
             }
         });
 
+        let speaker_audio_device = speaker_audio_device.clone();
         Box::pin(async move {
             let codec = track.codec();
             let mime_type = codec.capability.mime_type.to_lowercase();
             if mime_type == MIME_TYPE_OPUS.to_lowercase() {
                 println!("Got Opus track, Playing (48 kHz, 1 channels)");
                 tokio::spawn(async move {
-                    let mut playback = MonauralAudioPlayback::new("default", RECEIVE_SAMPLE_RATE)?;
+                    let mut playback = MonauralAudioPlayback::new(
+                        &speaker_audio_device,
+                        parsed.speaker_sample_rate,
+                    )?;
 
                     loop {
                         let (rtp_packet, _) = track.read_rtp().await?;
@@ -416,7 +427,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn media_engine(m: &mut MediaEngine) -> Result<(), webrtc::Error> {
+fn media_engine(m: &mut MediaEngine, audio_sample_rates: &[u32]) -> Result<(), webrtc::Error> {
     let fmt_line = [
         (
             102,
@@ -457,20 +468,22 @@ fn media_engine(m: &mut MediaEngine) -> Result<(), webrtc::Error> {
         )?;
     }
 
-    m.register_codec(
-        RTCRtpCodecParameters {
-            capability: RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_OPUS.to_owned(),
-                clock_rate: RECEIVE_SAMPLE_RATE,
-                channels: 1,
-                sdp_fmtp_line: "".to_owned(),
-                rtcp_feedback: vec![],
+    for &sample_rates in audio_sample_rates {
+        m.register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_OPUS.to_owned(),
+                    clock_rate: sample_rates,
+                    channels: 1,
+                    sdp_fmtp_line: "".to_owned(),
+                    rtcp_feedback: vec![],
+                },
+                payload_type: 111,
+                ..Default::default()
             },
-            payload_type: 111,
-            ..Default::default()
-        },
-        RTPCodecType::Audio,
-    )?;
+            RTPCodecType::Audio,
+        )?;
+    }
 
     Ok(())
 }
