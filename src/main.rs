@@ -6,7 +6,7 @@
 // or https://github.com/webrtc-rs/webrtc/blob/982829bffe07c61bce660b20499d9148861e0224/examples/LICENSE-APACHE
 // for more details about original license
 
-// You can use https://jsfiddle.net/8j26fhxk/ as browser side
+// You can use https://jsfiddle.net/qnt9sx0p/ as browser side
 
 mod audio;
 mod camera_capture;
