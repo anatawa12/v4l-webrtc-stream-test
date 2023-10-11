@@ -6,14 +6,17 @@
 // or https://github.com/webrtc-rs/webrtc/blob/982829bffe07c61bce660b20499d9148861e0224/examples/LICENSE-APACHE
 // for more details about original license
 
-// You can use https://jsfiddle.net/8j26fhxk/ as browser side
+// You can use https://jsfiddle.net/qnt9sx0p/ as browser side
 
+mod audio;
 mod camera_capture;
 mod monaural_audio_capture;
+mod monaural_audio_playback;
 mod nal_parser;
 
 use crate::camera_capture::CameraCapture;
 use crate::monaural_audio_capture::MonauralAudioCapture;
+use crate::monaural_audio_playback::MonauralAudioPlayback;
 use crate::nal_parser::H264Parser;
 use anyhow::Result;
 use clap::Parser;
@@ -31,7 +34,10 @@ use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
+use webrtc::rtp_transceiver::rtp_codec::{
+    RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
+};
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
@@ -75,6 +81,14 @@ struct Cli {
     /// Audio Device Name
     #[clap(long, default_value = "plughw:1,0")]
     audio_device: String,
+
+    // speaker options
+    /// Speaker Sampling rate of capture (Hz)
+    #[clap(long, default_value = "48000")]
+    speaker_sample_rate: u32,
+    /// Speaker Audio Device Name
+    #[clap(long, default_value = "default")]
+    speaker_audio_device: String,
 }
 
 #[derive(Copy, Clone)]
@@ -95,7 +109,7 @@ async fn main() -> Result<()> {
     // Create a MediaEngine object to configure the supported codec
     let mut m = MediaEngine::default();
 
-    m.register_default_codecs()?;
+    media_engine(&mut m, &[parsed.speaker_sample_rate, parsed.sample_rate])?;
 
     // Create a InterceptorRegistry. This is the user configurable RTP/RTCP Pipeline.
     // This provides NACKs, RTCP Reports and other features. If you use `webrtc.NewPeerConnection`
@@ -127,6 +141,8 @@ async fn main() -> Result<()> {
     let notify_tx = Arc::new(Notify::new());
     let notify_video = notify_tx.clone();
     let notify_audio = notify_tx.clone();
+
+    let done_notify = Arc::new(Notify::new());
 
     let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
     let video_done_tx = done_tx.clone();
@@ -202,7 +218,7 @@ async fn main() -> Result<()> {
                     video_track
                         .write_sample(&Sample {
                             data: Vec::from(nal).into(),
-                            duration: Duration::from_secs(1),
+                            duration: interval,
                             ..Default::default()
                         })
                         .await?;
@@ -248,12 +264,12 @@ async fn main() -> Result<()> {
         });
 
         tokio::spawn(async move {
-            let mut capture =
-                MonauralAudioCapture::new(
-                    &parsed.audio_device, 
-                    parsed.sample_rate,
-                    parsed.bit_rate as i32,
-                    parsed.frame_ms)?;
+            let mut capture = MonauralAudioCapture::new(
+                &parsed.audio_device,
+                parsed.sample_rate,
+                parsed.bit_rate as i32,
+                parsed.frame_ms,
+            )?;
 
             // Wait for connection established
             notify_audio.notified().await;
@@ -286,6 +302,56 @@ async fn main() -> Result<()> {
             Result::<()>::Ok(())
         });
     }
+
+    let pc = Arc::downgrade(&peer_connection);
+    let speaker_audio_device = parsed.speaker_audio_device;
+    peer_connection.on_track(Box::new(move |track, _, _| {
+        // Send a PLI on an interval so that the publisher is pushing a keyframe every rtcpPLIInterval
+        let media_ssrc = track.ssrc();
+        let pc2 = pc.clone();
+        tokio::spawn(async move {
+            let mut result = Result::<usize>::Ok(0);
+            while result.is_ok() {
+                let timeout = tokio::time::sleep(Duration::from_secs(3));
+                tokio::pin!(timeout);
+
+                tokio::select! {
+                    _ = timeout.as_mut() =>{
+                        if let Some(pc) = pc2.upgrade() {
+                            result = pc.write_rtcp(&[Box::new(PictureLossIndication {
+                                sender_ssrc: 0,
+                                media_ssrc,
+                            })]).await.map_err(Into::into);
+                        }else {
+                            break;
+                        }
+                    }
+                };
+            }
+        });
+
+        let speaker_audio_device = speaker_audio_device.clone();
+        Box::pin(async move {
+            let codec = track.codec();
+            let mime_type = codec.capability.mime_type.to_lowercase();
+            if mime_type == MIME_TYPE_OPUS.to_lowercase() {
+                println!("Got Opus track, Playing (48 kHz, 1 channels)");
+                tokio::spawn(async move {
+                    let mut playback = MonauralAudioPlayback::new(
+                        &speaker_audio_device,
+                        parsed.speaker_sample_rate,
+                    )?;
+
+                    loop {
+                        let (rtp_packet, _) = track.read_rtp().await?;
+                        playback.play_frame(&rtp_packet.payload)?;
+                    }
+
+                    Result::<()>::Ok(())
+                });
+            }
+        })
+    }));
 
     // Set the handler for ICE connection state
     // This will notify you when the peer has connected/disconnected
@@ -357,6 +423,67 @@ async fn main() -> Result<()> {
     };
 
     peer_connection.close().await?;
+
+    Ok(())
+}
+
+fn media_engine(m: &mut MediaEngine, audio_sample_rates: &[u32]) -> Result<(), webrtc::Error> {
+    let fmt_line = [
+        (
+            102,
+            "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+        ),
+        (
+            127,
+            "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f",
+        ),
+        (
+            125,
+            "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+        ),
+        (
+            108,
+            "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f",
+        ),
+        (
+            123,
+            "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032",
+        ),
+    ];
+
+    for (payload_type, sdp_fmtp_line) in fmt_line {
+        m.register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_H264.to_owned(),
+                    clock_rate: 90000,
+                    channels: 0,
+                    sdp_fmtp_line: sdp_fmtp_line.to_owned(),
+                    rtcp_feedback: vec![],
+                },
+                payload_type,
+                ..Default::default()
+            },
+            RTPCodecType::Video,
+        )?;
+    }
+
+    for &sample_rates in audio_sample_rates {
+        m.register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_OPUS.to_owned(),
+                    clock_rate: sample_rates,
+                    channels: 1,
+                    sdp_fmtp_line: "".to_owned(),
+                    rtcp_feedback: vec![],
+                },
+                payload_type: 111,
+                ..Default::default()
+            },
+            RTPCodecType::Audio,
+        )?;
+    }
 
     Ok(())
 }
