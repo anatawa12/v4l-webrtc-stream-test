@@ -8,12 +8,15 @@
 
 // You can use https://jsfiddle.net/8j26fhxk/ as browser side
 
+mod audio;
 mod camera_capture;
 mod monaural_audio_capture;
+mod monaural_audio_playback;
 mod nal_parser;
 
 use crate::camera_capture::CameraCapture;
 use crate::monaural_audio_capture::MonauralAudioCapture;
+use crate::monaural_audio_playback::MonauralAudioPlayback;
 use crate::nal_parser::H264Parser;
 use anyhow::Result;
 use clap::Parser;
@@ -326,30 +329,14 @@ async fn main() -> Result<()> {
             if mime_type == MIME_TYPE_OPUS.to_lowercase() {
                 println!("Got Opus track, Playing (48 kHz, 1 channels)");
                 tokio::spawn(async move {
-                    let pcm = alsa::PCM::new("default", alsa::Direction::Playback, false)?;
-                    {
-                        let params = alsa::pcm::HwParams::any(&pcm).unwrap();
-                        params.set_channels(1)?;
-                        params.set_format(alsa::pcm::Format::s16())?;
-                        params.set_rate(RECEIVE_SAMPLE_RATE, alsa::ValueOr::Nearest)?;
-                        params.set_access(alsa::pcm::Access::RWInterleaved)?;
-                        pcm.hw_params(&params)?;
-                    }
-
-                    let mut opus_decoder =
-                        opus::Decoder::new(RECEIVE_SAMPLE_RATE, opus::Channels::Mono)?;
-
-                    let mut output_buffer = vec![0i16; RECEIVE_SAMPLE_RATE as usize * 40 / 1000];
+                    let mut playback = MonauralAudioPlayback::new("default", RECEIVE_SAMPLE_RATE)?;
 
                     loop {
                         let (rtp_packet, _) = track.read_rtp().await?;
-                        let samples =
-                            opus_decoder.decode(&rtp_packet.payload, &mut output_buffer, false)?;
-                        let buffer = &output_buffer[..samples];
-                        pcm.io_i16()?.writei(buffer)?;
+                        playback.play_frame(&rtp_packet.payload)?;
                     }
 
-                    return Result::<()>::Ok(());
+                    Result::<()>::Ok(())
                 });
             }
         })
